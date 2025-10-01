@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
 단일 실행파일 빌드 스크립트
 PyInstaller를 사용하여 배포용 실행파일 생성
@@ -8,7 +10,14 @@ import sys
 import subprocess
 import shutil
 import platform
+import locale
 from pathlib import Path
+
+# Windows에서 UTF-8 인코딩 설정
+if platform.system() == "Windows":
+    import codecs
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
 
 class ZoomAttendanceBuilder:
     """
@@ -21,27 +30,27 @@ class ZoomAttendanceBuilder:
         self.dist_dir = self.project_dir / "dist"
         self.build_dir = self.project_dir / "build"
         
-        print(f"🔧 빌드 시스템: {self.system}")
-        print(f"📁 프로젝트 경로: {self.project_dir}")
+        print(f"[BUILD] Build System: {self.system}")
+        print(f"[PROJECT] Project Path: {self.project_dir}")
     
     def clean_build_dirs(self):
         """
         이전 빌드 결과물 정리
         """
-        print("\n🧹 이전 빌드 결과물 정리 중...")
+        print("\n[CLEAN] Cleaning previous build artifacts...")
         
         dirs_to_clean = [self.dist_dir, self.build_dir]
         
         for dir_path in dirs_to_clean:
             if dir_path.exists():
                 shutil.rmtree(dir_path)
-                print(f"  ✓ {dir_path} 삭제됨")
+                print(f"  [OK] Removed {dir_path}")
     
     def check_dependencies(self):
         """
         필요한 의존성 확인
         """
-        print("\n📦 의존성 확인 중...")
+        print("\n[DEPS] Checking dependencies...")
         
         required_packages = [
             'PyInstaller',
@@ -57,25 +66,25 @@ class ZoomAttendanceBuilder:
         for package in required_packages:
             try:
                 __import__(package.lower().replace('-', '_'))
-                print(f"  ✓ {package}")
+                print(f"  [OK] {package}")
             except ImportError:
                 missing_packages.append(package)
-                print(f"  ❌ {package} - 누락")
+                print(f"  [ERROR] {package} - 누락")
         
         if missing_packages:
-            print(f"\n⚠️  누락된 패키지: {', '.join(missing_packages)}")
+            print(f"\n[WARN]  누락된 패키지: {', '.join(missing_packages)}")
             print("다음 명령으로 설치하세요:")
             print(f"pip install {' '.join(missing_packages)}")
             return False
         
-        print("✅ 모든 의존성 확인 완료")
+        print("[SUCCESS] 모든 의존성 확인 완료")
         return True
     
     def create_icon(self):
         """
         기본 아이콘 생성
         """
-        print("\n🎨 아이콘 생성 중...")
+        print("\n[ICON] 아이콘 생성 중...")
         
         try:
             from PIL import Image, ImageDraw
@@ -124,13 +133,13 @@ class ZoomAttendanceBuilder:
             if self.system == "Windows":
                 icon_ico = assets_dir / "icon.ico"
                 img.save(icon_ico, "ICO", sizes=[(256, 256), (128, 128), (64, 64), (32, 32), (16, 16)])
-                print(f"  ✓ Windows 아이콘 생성: {icon_ico}")
+                print(f"  [OK] Windows 아이콘 생성: {icon_ico}")
             
-            print(f"  ✓ PNG 아이콘 생성: {icon_png}")
+            print(f"  [OK] PNG 아이콘 생성: {icon_png}")
             return True
             
         except Exception as e:
-            print(f"  ⚠️  아이콘 생성 실패: {e}")
+            print(f"  [WARN]  아이콘 생성 실패: {e}")
             print("  기본 아이콘 없이 빌드 진행")
             return False
     
@@ -138,12 +147,12 @@ class ZoomAttendanceBuilder:
         """
         .spec 파일 업데이트 (아이콘 경로 등)
         """
-        print("\n📝 spec 파일 업데이트 중...")
+        print("\n[SPEC] spec 파일 업데이트 중...")
         
         spec_file = self.project_dir / "zoom_attendance.spec"
         
         if not spec_file.exists():
-            print("  ❌ spec 파일을 찾을 수 없습니다.")
+            print("  [ERROR] spec 파일을 찾을 수 없습니다.")
             return False
         
         # spec 파일 읽기
@@ -165,14 +174,14 @@ class ZoomAttendanceBuilder:
         with open(spec_file, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"  ✓ spec 파일 업데이트 완료")
+        print(f"  [OK] spec 파일 업데이트 완료")
         return True
     
     def build_executable(self):
         """
         실행파일 빌드
         """
-        print("\n🏗️  실행파일 빌드 중...")
+        print("\n[BUILD]  실행파일 빌드 중...")
         print("이 과정은 몇 분이 소요될 수 있습니다...")
         
         # PyInstaller 명령 실행
@@ -195,26 +204,26 @@ class ZoomAttendanceBuilder:
             )
             
             if result.returncode == 0:
-                print("  ✅ 빌드 성공!")
+                print("  [SUCCESS] 빌드 성공!")
                 return True
             else:
-                print("  ❌ 빌드 실패!")
+                print("  [ERROR] 빌드 실패!")
                 print("오류 출력:")
                 print(result.stderr)
                 return False
                 
         except subprocess.TimeoutExpired:
-            print("  ⏰ 빌드 타임아웃 (30분 초과)")
+            print("  [TIMEOUT] 빌드 타임아웃 (30분 초과)")
             return False
         except Exception as e:
-            print(f"  ❌ 빌드 중 예외 발생: {e}")
+            print(f"  [ERROR] 빌드 중 예외 발생: {e}")
             return False
     
     def create_distribution_package(self):
         """
         배포 패키지 생성
         """
-        print("\n📦 배포 패키지 생성 중...")
+        print("\n[PACKAGE] 배포 패키지 생성 중...")
         
         # 실행파일 확인
         if self.system == "Windows":
@@ -225,7 +234,7 @@ class ZoomAttendanceBuilder:
         exe_path = self.dist_dir / exe_name
         
         if not exe_path.exists():
-            print(f"  ❌ 실행파일을 찾을 수 없습니다: {exe_path}")
+            print(f"  [ERROR] 실행파일을 찾을 수 없습니다: {exe_path}")
             return False
         
         # 배포 디렉토리 생성
@@ -245,7 +254,7 @@ class ZoomAttendanceBuilder:
         
         # 실행파일 복사
         shutil.copy2(exe_path, package_dir / exe_name)
-        print(f"  ✓ 실행파일 복사: {exe_name}")
+        print(f"  [OK] 실행파일 복사: {exe_name}")
         
         # 필수 파일들 복사
         essential_files = [
@@ -257,7 +266,7 @@ class ZoomAttendanceBuilder:
             src_file = self.project_dir / file_name
             if src_file.exists():
                 shutil.copy2(src_file, package_dir / file_name)
-                print(f"  ✓ 파일 복사: {file_name}")
+                print(f"  [OK] 파일 복사: {file_name}")
         
         # README.md가 없으면 생성
         readme_path = package_dir / "README.md"
@@ -271,9 +280,9 @@ class ZoomAttendanceBuilder:
         zip_path = release_dir / f"{package_name}.zip"
         shutil.make_archive(str(zip_path).replace('.zip', ''), 'zip', package_dir)
         
-        print(f"  ✅ 배포 패키지 생성 완료!")
-        print(f"  📁 패키지 위치: {package_dir}")
-        print(f"  📦 ZIP 파일: {zip_path}")
+        print(f"  [SUCCESS] 배포 패키지 생성 완료!")
+        print(f"  [FOLDER] 패키지 위치: {package_dir}")
+        print(f"  [PACKAGE] ZIP 파일: {zip_path}")
         
         return True
     
@@ -283,7 +292,7 @@ class ZoomAttendanceBuilder:
         """
         content = """# Zoom 강의 출석 자동화 v2.0
 
-## 🚀 사용법
+## [SUCCESS] 사용법
 
 ### Windows
 1. `ZoomAttendance.exe`를 더블클릭하여 실행
@@ -293,27 +302,27 @@ class ZoomAttendanceBuilder:
 1. 터미널에서 `./ZoomAttendance` 실행
 2. 또는 `실행.sh` 스크립트 사용
 
-## 📋 기능
+## [FEATURES] 기능
 
-- ✅ 실시간 얼굴 감지 및 시각화
-- ✅ 듀얼 모니터 지원
-- ✅ 자동 스케줄링 (각 교시 35~45분)
-- ✅ 알림 시스템
-- ✅ CSV 로그 기록
+- [SUCCESS] 실시간 얼굴 감지 및 시각화
+- [SUCCESS] 듀얼 모니터 지원
+- [SUCCESS] 자동 스케줄링 (각 교시 35~45분)
+- [SUCCESS] 알림 시스템
+- [SUCCESS] CSV 로그 기록
 
-## ⚙️ 설정
+## [SETTINGS] 설정
 
 1. **모니터 선택**: 프로그램에서 Zoom이 실행 중인 모니터 선택
 2. **모니터링 시작**: 실시간 화면 감지 활성화  
 3. **자동 스케줄**: 교시별 자동 출석 체크 활성화
 
-## 📂 생성되는 파일
+## [FILES] 생성되는 파일
 
 - `captures/`: 캡쳐된 이미지 저장 폴더
 - `attendance_log.csv`: 출석 기록 로그
 - `zoom_attendance_gui.log`: 프로그램 실행 로그
 
-## 🔧 문제 해결
+## [TROUBLESHOOT] 문제 해결
 
 ### 화면 캡쳐 권한 (macOS)
 1. 시스템 환경설정 > 보안 및 개인정보 보호
@@ -355,7 +364,7 @@ if errorlevel 1 (
             with open(package_dir / "실행.bat", 'w', encoding='utf-8') as f:
                 f.write(bat_content)
             
-            print("  ✓ Windows 실행 스크립트 생성: 실행.bat")
+            print("  [OK] Windows 실행 스크립트 생성: 실행.bat")
         
         else:
             # Unix/Mac 셸 스크립트
@@ -383,13 +392,13 @@ read -p "Enter 키를 눌러 닫기..."
             # 실행 권한 부여
             os.chmod(script_path, 0o755)
             
-            print("  ✓ Unix/Mac 실행 스크립트 생성: 실행.sh")
+            print("  [OK] Unix/Mac 실행 스크립트 생성: 실행.sh")
     
     def build(self):
         """
         전체 빌드 프로세스 실행
         """
-        print("🏭 Zoom 출석 자동화 빌드 시작")
+        print("[FACTORY] Zoom 출석 자동화 빌드 시작")
         print("=" * 50)
         
         steps = [
@@ -407,19 +416,19 @@ read -p "Enter 키를 눌러 닫기..."
             
             try:
                 if not step_func():
-                    print(f"\n❌ 빌드 실패: {step_name}")
+                    print(f"\n[ERROR] 빌드 실패: {step_name}")
                     return False
             except Exception as e:
-                print(f"\n❌ 빌드 오류: {step_name}")
+                print(f"\n[ERROR] 빌드 오류: {step_name}")
                 print(f"상세 오류: {e}")
                 return False
         
         print("\n" + "=" * 50)
-        print("🎉 빌드 완료!")
-        print("\n📁 생성된 파일:")
+        print("[COMPLETE] 빌드 완료!")
+        print("\n[FOLDER] 생성된 파일:")
         print(f"  - 실행파일: dist/")
         print(f"  - 배포 패키지: release/")
-        print("\n🚀 배포 준비 완료!")
+        print("\n[SUCCESS] 배포 준비 완료!")
         
         return True
 
@@ -432,16 +441,16 @@ def main():
     try:
         success = builder.build()
         if success:
-            print("\n✅ 빌드가 성공적으로 완료되었습니다!")
+            print("\n[SUCCESS] 빌드가 성공적으로 완료되었습니다!")
             sys.exit(0)
         else:
-            print("\n❌ 빌드 실패")
+            print("\n[ERROR] 빌드 실패")
             sys.exit(1)
     except KeyboardInterrupt:
-        print("\n\n⏹️  사용자에 의해 빌드가 취소되었습니다.")
+        print("\n\n[STOP]  사용자에 의해 빌드가 취소되었습니다.")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ 예상치 못한 오류: {e}")
+        print(f"\n[ERROR] 예상치 못한 오류: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
