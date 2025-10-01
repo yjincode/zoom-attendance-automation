@@ -31,7 +31,29 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install --upgrade setuptools wheel
+        
+        # Install packages individually with error handling
+        pip install opencv-python>=4.8.0
+        pip install mtcnn>=0.1.1
+        pip install mss>=9.0.1
+        pip install APScheduler>=3.10.4
+        pip install pandas>=2.0.0
+        pip install numpy>=1.24.0
+        pip install Pillow>=10.0.0
+        pip install tensorflow>=2.13.0
+        pip install PyQt5>=5.15.0
+        pip install plyer>=2.1.0
+        pip install psutil>=5.9.0
+        pip install pyinstaller>=5.13.0
+        pip install auto-py-to-exe>=2.40.0
+        
+    - name: Verify critical packages
+      run: |
+        python -c "import PyInstaller; print('PyInstaller OK')"
+        python -c "import cv2; print('OpenCV OK')" 
+        python -c "import PyQt5; print('PyQt5 OK')"
+        python -c "import mtcnn; print('MTCNN OK')"
         
     - name: Create assets directory
       run: mkdir -p assets
@@ -119,7 +141,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install --upgrade setuptools wheel
         pip install -r requirements.txt
+        
+    - name: Verify critical packages
+      run: |
+        python -c "import PyInstaller; print('PyInstaller OK')"
+        python -c "import cv2; print('OpenCV OK')" 
+        python -c "import PyQt5; print('PyQt5 OK')"
+        python -c "import mtcnn; print('MTCNN OK')"
         
     - name: Build macOS app
       run: |
