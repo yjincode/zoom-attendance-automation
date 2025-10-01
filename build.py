@@ -52,24 +52,25 @@ class ZoomAttendanceBuilder:
         """
         print("\n[DEPS] Checking dependencies...")
         
-        required_packages = [
-            'PyInstaller',
-            'opencv-python',
-            'mtcnn', 
-            'mss',
-            'PyQt5',
-            'tensorflow'
-        ]
+        # 패키지명과 실제 import명이 다른 경우를 매핑
+        package_mapping = {
+            'PyInstaller': 'PyInstaller',
+            'opencv-python': 'cv2',
+            'mtcnn': 'mtcnn', 
+            'mss': 'mss',
+            'PyQt5': 'PyQt5',
+            'tensorflow': 'tensorflow'
+        }
         
         missing_packages = []
         
-        for package in required_packages:
+        for package_name, import_name in package_mapping.items():
             try:
-                __import__(package.lower().replace('-', '_'))
-                print(f"  [OK] {package}")
+                __import__(import_name)
+                print(f"  [OK] {package_name}")
             except ImportError:
-                missing_packages.append(package)
-                print(f"  [ERROR] {package} - 누락")
+                missing_packages.append(package_name)
+                print(f"  [ERROR] {package_name} - 누락")
         
         if missing_packages:
             print(f"\n[WARN]  누락된 패키지: {', '.join(missing_packages)}")
