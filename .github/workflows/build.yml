@@ -1,0 +1,134 @@
+name: Build Zoom Attendance App
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~\AppData\Local\pip\Cache
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Create assets directory
+      run: mkdir -p assets
+      
+    - name: Build executable
+      run: |
+        python build.py
+        
+    - name: Test executable
+      run: |
+        if (Test-Path "dist/ZoomAttendance.exe") {
+          Write-Host "✅ 실행파일이 성공적으로 생성되었습니다"
+          Get-ChildItem dist/ -Recurse | Format-Table Name, Length
+        } else {
+          Write-Host "❌ 실행파일 생성 실패"
+          exit 1
+        }
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ZoomAttendance-Windows-${{ github.run_number }}
+        path: |
+          dist/
+          release/
+        retention-days: 30
+        
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v2.0-build${{ github.run_number }}
+        name: "Zoom 출석 자동화 v2.0 (빌드 #${{ github.run_number }})"
+        body: |
+          ## 🎓 Zoom 강의 출석 자동화 v2.0
+          
+          ### 📥 다운로드
+          - **ZoomAttendance.exe**: Windows용 실행파일
+          - **전체 패키지**: 사용 설명서 포함
+          
+          ### 🎯 주요 기능
+          - 듀얼 모니터 지원 (서브모니터 자동 감지)
+          - 실시간 얼굴 감지 및 시각화
+          - 자동 교시 스케줄링 (점심시간 제외)
+          - 참가자 수 실시간 카운팅
+          - 알림 시스템
+          
+          ### 🚀 사용법
+          1. ZoomAttendance.exe 다운로드
+          2. Windows 컴퓨터에서 더블클릭 실행
+          3. 서브모니터에 Zoom 실행
+          4. "모니터링 시작" 버튼 클릭
+          
+          ### ⚠️ 주의사항
+          - Windows 10/11 필요
+          - 관리자 권한 권장
+          - 바이러스 백신 허용 처리 필요할 수 있음
+          
+          ---
+          빌드 시간: ${{ github.event.head_commit.timestamp }}
+          커밋: ${{ github.sha }}
+        files: |
+          release/*.zip
+          dist/ZoomAttendance.exe
+        draft: false
+        prerelease: false
+        make_latest: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # macOS 빌드 (참고용)
+  build-macos:
+    runs-on: macos-latest
+    if: github.event_name == 'workflow_dispatch'  # 수동 실행 시에만
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Build macOS app
+      run: |
+        python build.py
+        
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ZoomAttendance-macOS-${{ github.run_number }}
+        path: |
+          dist/
+          release/
