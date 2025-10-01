@@ -42,9 +42,19 @@ class ZoomAttendanceBuilder:
         dirs_to_clean = [self.dist_dir, self.build_dir]
         
         for dir_path in dirs_to_clean:
-            if dir_path.exists():
-                shutil.rmtree(dir_path)
-                print(f"  [OK] Removed {dir_path}")
+            try:
+                if dir_path.exists():
+                    shutil.rmtree(dir_path)
+                    print(f"  [OK] Removed {dir_path}")
+                else:
+                    print(f"  [SKIP] {dir_path} does not exist")
+            except Exception as e:
+                print(f"  [WARN] Failed to remove {dir_path}: {e}")
+                # Windows에서 권한 문제로 삭제 실패해도 계속 진행
+                continue
+        
+        print("  [SUCCESS] Build cleanup completed")
+        return True
     
     def check_dependencies(self):
         """
