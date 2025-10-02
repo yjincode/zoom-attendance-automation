@@ -39,7 +39,6 @@ jobs:
         
         # Install packages individually with error handling
         pip install opencv-python>=4.8.0
-        pip install mediapipe>=0.10.0
         pip install mss>=9.0.1
         pip install APScheduler>=3.10.4
         pip install pandas>=2.0.0
@@ -56,7 +55,7 @@ jobs:
         python -c "import PyInstaller; print('PyInstaller OK')"
         python -c "import cv2; print('OpenCV OK')" 
         python -c "import PyQt5; print('PyQt5 OK')"
-        python -c "import mediapipe; print('MediaPipe OK')"
+        python -c "import cv2.dnn; print('OpenCV DNN OK')"
         
     - name: Create assets directory
       run: mkdir -p assets
