@@ -156,15 +156,94 @@ class ZoomAttendanceBuilder:
     
     def update_spec_file(self):
         """
-        .spec 파일 업데이트 (아이콘 경로 등)
+        .spec 파일 생성 또는 업데이트
         """
-        print("\n[SPEC] spec 파일 업데이트 중...")
+        print("\n[SPEC] spec 파일 처리 중...")
         
         spec_file = self.project_dir / "zoom_attendance.spec"
         
         if not spec_file.exists():
-            print("  [ERROR] spec 파일을 찾을 수 없습니다.")
-            return False
+            print("  [INFO] spec 파일이 없습니다. 새로 생성합니다.")
+            return self._create_spec_file()
+        else:
+            print("  [INFO] 기존 spec 파일을 업데이트합니다.")
+            return self._update_existing_spec_file()
+    
+    def _create_spec_file(self):
+        """
+        새로운 spec 파일 생성
+        """
+        # 아이콘 경로 설정
+        assets_dir = self.project_dir / "assets"
+        if self.system == "Windows":
+            icon_path = assets_dir / "icon.ico"
+        else:
+            icon_path = assets_dir / "icon.png"
+        
+        icon_line = f"icon='{icon_path}'," if icon_path.exists() else "# icon=None,"
+        
+        spec_content = f"""# -*- mode: python ; coding: utf-8 -*-
+
+a = Analysis(
+    ['desktop_app.py'],
+    pathex=['{self.project_dir}'],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'PyQt5.QtCore',
+        'PyQt5.QtWidgets', 
+        'PyQt5.QtGui',
+        'cv2',
+        'mtcnn',
+        'tensorflow',
+        'mss',
+        'numpy',
+        'pandas'
+    ],
+    hookspath=[],
+    hooksconfig={{}},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='ZoomAttendance',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    {icon_line}
+)
+"""
+        
+        spec_file = self.project_dir / "zoom_attendance.spec"
+        with open(spec_file, 'w', encoding='utf-8') as f:
+            f.write(spec_content)
+        
+        print(f"  [OK] 새 spec 파일 생성 완료")
+        return True
+    
+    def _update_existing_spec_file(self):
+        """
+        기존 spec 파일 업데이트
+        """
+        spec_file = self.project_dir / "zoom_attendance.spec"
         
         # spec 파일 읽기
         with open(spec_file, 'r', encoding='utf-8') as f:
@@ -172,14 +251,20 @@ class ZoomAttendanceBuilder:
         
         # 아이콘 경로 업데이트
         assets_dir = self.project_dir / "assets"
-        
         if self.system == "Windows":
             icon_path = assets_dir / "icon.ico"
-            if icon_path.exists():
-                content = content.replace(
-                    "# icon='assets/icon.ico',",
-                    f"icon='{icon_path}'"
-                )
+        else:
+            icon_path = assets_dir / "icon.png"
+        
+        if icon_path.exists():
+            # 기존 아이콘 라인을 새로운 경로로 교체
+            content = content.replace(
+                "# icon='assets/icon.ico',",
+                f"icon='{icon_path}'"
+            ).replace(
+                "icon='assets/icon.ico',",
+                f"icon='{icon_path}'"
+            )
         
         # 업데이트된 내용 저장
         with open(spec_file, 'w', encoding='utf-8') as f:
