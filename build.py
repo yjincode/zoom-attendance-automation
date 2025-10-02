@@ -66,10 +66,9 @@ class ZoomAttendanceBuilder:
         package_mapping = {
             'PyInstaller': 'PyInstaller',
             'opencv-python': 'cv2',
-            'mtcnn': 'mtcnn', 
+            'mediapipe': 'mediapipe', 
             'mss': 'mss',
-            'PyQt5': 'PyQt5',
-            'tensorflow': 'tensorflow'
+            'PyQt5': 'PyQt5'
         }
         
         missing_packages = []
@@ -195,14 +194,12 @@ a = Analysis(
         'PyQt5.QtWidgets', 
         'PyQt5.QtGui',
         'cv2',
-        'mtcnn',
+        'mediapipe',
+        'mediapipe.python',
+        'mediapipe.framework.formats',
         'mss',
         'numpy',
-        'pandas',
-        'tensorflow',
-        'tensorflow.python',
-        'tensorflow.python.platform',
-        'tensorflow.python.platform.build_info'
+        'pandas'
     ],
     excludes=[
         'tkinter',

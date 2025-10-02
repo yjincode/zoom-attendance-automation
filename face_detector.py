@@ -1,38 +1,41 @@
 """
 메모리 효율적인 얼굴 감지 모듈
-MTCNN을 사용하여 이미지에서 얼굴을 탐지하되, 메모리 사용량을 최적화
-교시별 특정 시간(35~50분)에만 1분마다 15초간 모델 로드하여 리소스 절약
+MediaPipe Face Detection을 사용하여 고성능 얼굴 탐지 제공
+TensorFlow 의존성 없이 안정적인 Windows 실행 보장
 """
 
 import cv2
 import numpy as np
-from mtcnn import MTCNN
 from typing import List, Tuple, Optional
 import logging
 import gc
 import time
 from datetime import datetime, timedelta
 import threading
+import os
+import mediapipe as mp
 
 class FaceDetector:
     """
-    메모리 효율적인 MTCNN 얼굴 탐지 클래스
-    필요할 때만 모델을 로드하여 메모리 사용량 최적화
-    교시별 35~50분 시간대에만 1분마다 15초간 활성화
+    MediaPipe 기반 얼굴 탐지 클래스
+    Google MediaPipe를 사용하여 고성능 얼굴 감지 제공
+    TensorFlow 의존성 없이 Windows에서 안정적으로 실행
     """
     
-    def __init__(self, min_face_size=20):
+    def __init__(self, min_detection_confidence=0.7):
         """
         얼굴 탐지기 초기화
         
         Args:
-            min_face_size (int): 탐지할 최소 얼굴 크기 (픽셀)
+            min_detection_confidence (float): 최소 탐지 신뢰도 (0.0~1.0)
         """
-        self.min_face_size = min_face_size
+        self.min_detection_confidence = min_detection_confidence
         self.logger = logging.getLogger(__name__)
         
-        # 메모리 효율성을 위한 변수들
-        self.detector = None
+        # MediaPipe Face Detection 모델
+        self.mp_face_detection = mp.solutions.face_detection
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.face_detection = None
         self.is_model_loaded = False
         self.last_detection_time = None
         self.detection_active = False
@@ -43,36 +46,47 @@ class FaceDetector:
         self.detection_interval = 60  # 1분마다
         self.detection_duration = 15  # 15초간 활성화
         
-        self.logger.info("메모리 효율적인 얼굴 탐지기 초기화 완료")
+        # 초기화 시 모델 로드
+        self._load_model()
+        
+        self.logger.info("MediaPipe 기반 얼굴 탐지기 초기화 완료")
     
     def _load_model(self):
         """
-        MTCNN 모델 로드 (필요할 때만)
+        MediaPipe Face Detection 모델 로드
         """
         try:
             if not self.is_model_loaded:
-                self.logger.info("MTCNN 모델 로딩 중...")
-                self.detector = MTCNN(min_face_size=self.min_face_size)
+                self.logger.info("MediaPipe Face Detection 모델 로딩 중...")
+                
+                # MediaPipe FaceDetection 초기화
+                self.face_detection = self.mp_face_detection.FaceDetection(
+                    model_selection=0,  # 0: 가까운 거리, 1: 먼 거리
+                    min_detection_confidence=self.min_detection_confidence
+                )
+                
                 self.is_model_loaded = True
-                self.logger.info("MTCNN 모델 로드 완료")
+                self.logger.info("MediaPipe Face Detection 모델 로드 완료")
                 
         except Exception as e:
-            self.logger.error(f"MTCNN 모델 로드 실패: {e}")
+            self.logger.error(f"MediaPipe 모델 로드 실패: {e}")
             self.is_model_loaded = False
     
     def _unload_model(self):
         """
-        MTCNN 모델 언로드 (메모리 절약)
+        MediaPipe 모델 언로드 (메모리 절약)
         """
         try:
             if self.is_model_loaded:
-                self.detector = None
+                if self.face_detection:
+                    self.face_detection.close()
+                self.face_detection = None
                 self.is_model_loaded = False
                 
                 # 가비지 컬렉션 강제 실행
                 gc.collect()
                 
-                self.logger.info("MTCNN 모델 언로드 완료 - 메모리 절약")
+                self.logger.info("MediaPipe 모델 언로드 완료 - 메모리 절약")
                 
         except Exception as e:
             self.logger.error(f"모델 언로드 중 오류: {e}")
@@ -181,18 +195,43 @@ class FaceDetector:
                 self.start_detection_cycle()
             
             # 모델이 로드되지 않았으면 빈 결과 반환
-            if not self.is_model_loaded or self.detector is None:
+            if not self.is_model_loaded or self.face_detection is None:
                 return []
             
             with self.detection_lock:
-                if not self.detection_active:
+                if not self.detection_active and not force_detection:
                     return []
                 
-                # BGR to RGB 변환 (MTCNN은 RGB 형식을 요구)
+                # BGR to RGB 변환 (MediaPipe는 RGB 형식을 요구)
                 rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 
                 # 얼굴 탐지 수행
-                faces = self.detector.detect_faces(rgb_image)
+                results = self.face_detection.process(rgb_image)
+                faces = []
+                
+                if results.detections:
+                    h, w, _ = image.shape
+                    for detection in results.detections:
+                        # 신뢰도 추출
+                        confidence = detection.score[0]
+                        
+                        # 바운딩 박스 추출
+                        bbox = detection.location_data.relative_bounding_box
+                        x = int(bbox.xmin * w)
+                        y = int(bbox.ymin * h)
+                        width = int(bbox.width * w)
+                        height = int(bbox.height * h)
+                        
+                        # 키포인트 추출
+                        keypoints = {}
+                        for idx, keypoint in enumerate(detection.location_data.relative_keypoints):
+                            keypoints[f'keypoint_{idx}'] = (int(keypoint.x * w), int(keypoint.y * h))
+                        
+                        faces.append({
+                            'box': [x, y, width, height],
+                            'confidence': confidence,
+                            'keypoints': keypoints
+                        })
                 
                 self.logger.debug(f"탐지된 얼굴 수: {len(faces)}")
                 return faces
@@ -235,26 +274,7 @@ class FaceDetector:
         Returns:
             List[dict]: 탐지된 얼굴 정보 리스트
         """
-        try:
-            # 강제로 모델 로드
-            if not self.is_model_loaded:
-                self._load_model()
-            
-            if not self.is_model_loaded or self.detector is None:
-                return []
-            
-            # BGR to RGB 변환
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            
-            # 얼굴 탐지 수행
-            faces = self.detector.detect_faces(rgb_image)
-            
-            self.logger.info(f"강제 탐지 결과: {len(faces)}개 얼굴")
-            return faces
-            
-        except Exception as e:
-            self.logger.error(f"강제 얼굴 탐지 중 오류: {e}")
-            return []
+        return self.detect_faces(image, force_detection=True)
     
     def get_memory_status(self) -> dict:
         """
@@ -309,7 +329,7 @@ class FaceDetector:
         
         # 메모리 상태 정보 추가
         status = self.get_memory_status()
-        status_text = f"Model: {'Loaded' if status['model_loaded'] else 'Unloaded'} | " \
+        status_text = f"MediaPipe: {'Loaded' if status['model_loaded'] else 'Unloaded'} | " \
                      f"Active: {'Yes' if status['detection_active'] else 'No'} | " \
                      f"Time: {'Yes' if status['is_detection_time'] else 'No'}"
         
@@ -327,6 +347,11 @@ class FaceDetector:
             text = f"Face: {confidence:.2f}"
             cv2.putText(result_image, text, (x, y - 10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            
+            # 키포인트 그리기 (눈, 코, 입)
+            if 'keypoints' in face:
+                for point_name, (px, py) in face['keypoints'].items():
+                    cv2.circle(result_image, (px, py), 3, (255, 0, 0), -1)
         
         if save_path:
             cv2.imwrite(save_path, result_image)
@@ -363,7 +388,7 @@ if __name__ == "__main__":
     # 메모리 효율적인 얼굴 탐지기 초기화
     detector = FaceDetector()
     
-    print("🧠 메모리 효율적인 얼굴 탐지기 테스트")
+    print("MediaPipe 얼굴 탐지기 테스트")
     print("=" * 50)
     
     # 현재 상태 확인
@@ -400,7 +425,7 @@ if __name__ == "__main__":
                 cv2.putText(result, f"Time: {current_time}", (10, 60), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
-                cv2.imshow("Memory Efficient Face Detection", result)
+                cv2.imshow("MediaPipe Face Detection", result)
             
             cap.release()
             cv2.destroyAllWindows()
@@ -411,4 +436,4 @@ if __name__ == "__main__":
     
     # 리소스 정리
     detector.cleanup()
-    print("메모리 효율적인 얼굴 탐지 모듈 테스트 완료")
+    print("MediaPipe 얼굴 탐지 모듈 테스트 완료")
