@@ -29,15 +29,14 @@ class ClassScheduler:
         
         # 교시 시간표 정의 (시작시간, 종료시간)
         self.class_schedule = [
-            (time(9, 30), time(10, 20)),   # 1교시
-            (time(10, 30), time(11, 20)),  # 2교시  
-            (time(11, 30), time(12, 20)),  # 3교시
-            # 점심시간 12:30-14:30
-            (time(14, 30), time(15, 20)),  # 4교시
-            (time(15, 30), time(16, 20)),  # 5교시
-            (time(16, 30), time(17, 20)),  # 6교시
-            (time(17, 30), time(18, 20)),  # 7교시
-            (time(18, 30), time(19, 20)),  # 8교시
+            (time(9, 30), time(10, 30)),   # 1교시
+            (time(10, 30), time(11, 30)),  # 2교시  
+            (time(11, 30), time(12, 30)),  # 3교시
+            (time(12, 30), time(13, 30)),  # 4교시
+            (time(14, 30), time(15, 30)),  # 5교시
+            (time(15, 30), time(16, 30)),  # 6교시
+            (time(16, 30), time(17, 30)),  # 7교시
+            (time(17, 30), time(18, 30)),  # 8교시
         ]
         
         self.logger.info(f"총 {len(self.class_schedule)}교시 스케줄 설정 완료")

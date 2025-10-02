@@ -66,10 +66,15 @@ class CaptureThread(QThread):
         
         while self.running:
             try:
-                # 화면 캡쳐
-                screenshot = self.screen_capturer.capture_screen()
+                # 화면 캡쳐 (srcdc 오류 방지를 위한 추가 예외 처리)
+                try:
+                    screenshot = self.screen_capturer.capture_screen()
+                except Exception as capture_error:
+                    self.logger.warning(f"화면 캡쳐 일시 실패, 재시도: {capture_error}")
+                    self.msleep(500)  # 0.5초 대기 후 재시도
+                    continue
                 
-                if screenshot.size > 0:
+                if screenshot is not None and screenshot.size > 0:
                     # 테스트 모드일 때 강제 탐지 활성화
                     if self.test_mode_active:
                         # 강제로 얼굴 탐지 모델 로드
@@ -105,6 +110,9 @@ class CaptureThread(QThread):
         스레드 중지
         """
         self.running = False
+        # 스크린 캡처 리소스 정리
+        if hasattr(self, 'screen_capturer'):
+            self.screen_capturer.cleanup()
         self.wait()
     
     def set_capture_interval(self, interval_ms: int):
@@ -123,6 +131,10 @@ class CaptureThread(QThread):
         Args:
             monitor_number (int): 새 모니터 번호
         """
+        # 기존 리소스 정리
+        if hasattr(self, 'screen_capturer'):
+            self.screen_capturer.cleanup()
+        
         self.monitor_number = monitor_number
         self.screen_capturer = ScreenCapture(monitor_number)
 
@@ -181,6 +193,9 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 모니터 자동 감지
         self.auto_detect_zoom_monitor()
+        
+        # 실시간 업데이트 타이머 시작
+        self.start_realtime_updates()
     
     def init_ui(self):
         """
@@ -198,47 +213,172 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 탭 생성
         self.create_main_tab()      # 메인 모니터링
-        self.create_test_tab()      # 테스트 및 설정
-        self.create_schedule_tab()  # 교시 설정
+        self.create_control_tab()   # 제어
+        self.create_settings_tab()  # 설정
     
     def create_main_tab(self):
         """
-        메인 모니터링 탭 생성
+        메인 모니터링 탭 생성 - 실시간 미리보기와 상태 표시
         """
         main_tab = QWidget()
         self.tab_widget.addTab(main_tab, "📹 메인 모니터링")
         
         layout = QHBoxLayout(main_tab)
         
-        # 왼쪽 패널 (컨트롤)
-        left_panel = self.create_control_panel()
+        # 왼쪽 패널 (상태 정보)
+        left_panel = self.create_status_panel()
         layout.addWidget(left_panel, 1)
         
-        # 오른쪽 패널 (모니터링 화면)
-        right_panel = self.create_monitor_panel()
+        # 오른쪽 패널 (실시간 미리보기)
+        right_panel = self.create_preview_panel()
         layout.addWidget(right_panel, 2)
     
-    def create_test_tab(self):
+    def create_status_panel(self):
         """
-        테스트 및 설정 탭 생성
+        실시간 상태 정보 패널 생성
         """
-        test_tab = QWidget()
-        self.tab_widget.addTab(test_tab, "🔧 테스트 & 설정")
+        panel = QFrame()
+        panel.setFrameStyle(QFrame.StyledPanel)
+        layout = QVBoxLayout(panel)
         
-        layout = QVBoxLayout(test_tab)
+        # 현재 시간 표시
+        time_group = QGroupBox("📅 현재 시간")
+        time_layout = QVBoxLayout(time_group)
         
-        # 테스트 섹션
-        test_group = QGroupBox("실시간 테스트")
+        self.current_time_label = QLabel("--:--:--")
+        self.current_time_label.setAlignment(Qt.AlignCenter)
+        self.current_time_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #2196F3;")
+        time_layout.addWidget(self.current_time_label)
+        
+        self.current_date_label = QLabel("----년 --월 --일")
+        self.current_date_label.setAlignment(Qt.AlignCenter)
+        self.current_date_label.setStyleSheet("font-size: 14px; color: #666;")
+        time_layout.addWidget(self.current_date_label)
+        
+        layout.addWidget(time_group)
+        
+        # 현재 교시 표시
+        class_group = QGroupBox("🎓 현재 교시")
+        class_layout = QVBoxLayout(class_group)
+        
+        self.current_class_label = QLabel("수업 시간 아님")
+        self.current_class_label.setAlignment(Qt.AlignCenter)
+        self.current_class_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #FF5722;")
+        class_layout.addWidget(self.current_class_label)
+        
+        layout.addWidget(class_group)
+        
+        # 감지 상태 표시
+        detection_group = QGroupBox("👥 감지 상태")
+        detection_layout = QVBoxLayout(detection_group)
+        
+        self.participant_count_label = QLabel("참여자: 0명")
+        self.participant_count_label.setAlignment(Qt.AlignCenter)
+        self.participant_count_label.setStyleSheet("font-size: 16px; color: #4CAF50;")
+        detection_layout.addWidget(self.participant_count_label)
+        
+        self.face_count_label = QLabel("얼굴 감지: 0명")
+        self.face_count_label.setAlignment(Qt.AlignCenter)
+        self.face_count_label.setStyleSheet("font-size: 16px; color: #2196F3;")
+        detection_layout.addWidget(self.face_count_label)
+        
+        layout.addWidget(detection_group)
+        
+        # 모니터링 상태
+        monitoring_group = QGroupBox("🔍 모니터링 상태")
+        monitoring_layout = QVBoxLayout(monitoring_group)
+        
+        self.monitoring_status_label = QLabel("❌ 중지됨")
+        self.monitoring_status_label.setAlignment(Qt.AlignCenter)
+        self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #F44336;")
+        monitoring_layout.addWidget(self.monitoring_status_label)
+        
+        layout.addWidget(monitoring_group)
+        
+        # 다음 자동 캡처 시간
+        next_group = QGroupBox("⏰ 다음 자동캡처")
+        next_layout = QVBoxLayout(next_group)
+        
+        self.next_capture_label = QLabel("대기 중...")
+        self.next_capture_label.setAlignment(Qt.AlignCenter)
+        self.next_capture_label.setStyleSheet("font-size: 12px; color: #666;")
+        self.next_capture_label.setWordWrap(True)
+        next_layout.addWidget(self.next_capture_label)
+        
+        layout.addWidget(next_group)
+        
+        layout.addStretch()
+        
+        return panel
+    
+    def create_preview_panel(self):
+        """
+        실시간 미리보기 패널 생성
+        """
+        panel = QFrame()
+        panel.setFrameStyle(QFrame.StyledPanel)
+        layout = QVBoxLayout(panel)
+        
+        # 미리보기 화면
+        preview_group = QGroupBox("📺 실시간 미리보기")
+        preview_layout = QVBoxLayout(preview_group)
+        
+        self.preview_label = QLabel("모니터링을 시작하세요")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumSize(640, 360)
+        self.preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #f5f5f5; color: #666;")
+        preview_layout.addWidget(self.preview_label)
+        
+        layout.addWidget(preview_group)
+        
+        return panel
+    
+    def create_control_tab(self):
+        """
+        제어 탭 생성 - 모니터링 제어 및 테스트
+        """
+        control_tab = QWidget()
+        self.tab_widget.addTab(control_tab, "🎮 제어")
+        
+        layout = QVBoxLayout(control_tab)
+        
+        # 메인 제어 섹션
+        main_control_group = QGroupBox("📹 메인 제어")
+        main_control_layout = QVBoxLayout(main_control_group)
+        
+        # 모니터링 시작/중지 버튼 (원버튼)
+        self.main_monitoring_btn = QPushButton("🚀 모니터링 & 자동스케줄 시작")
+        self.main_monitoring_btn.clicked.connect(self.toggle_main_monitoring)
+        self.main_monitoring_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 16px; padding: 15px; font-weight: bold; }")
+        main_control_layout.addWidget(self.main_monitoring_btn)
+        
+        layout.addWidget(main_control_group)
+        
+        # 탐지 조건 설정
+        detection_group = QGroupBox("👥 탐지 조건")
+        detection_layout = QGridLayout(detection_group)
+        
+        detection_layout.addWidget(QLabel("수업 참여자 수 (강사포함):"), 0, 0)
+        self.face_count_spinbox = QSpinBox()
+        self.face_count_spinbox.setRange(1, 50)
+        self.face_count_spinbox.setValue(self.required_face_count)
+        self.face_count_spinbox.setSuffix("명")
+        detection_layout.addWidget(self.face_count_spinbox, 0, 1)
+        
+        layout.addWidget(detection_group)
+        
+        # 테스트 모드 섹션
+        test_group = QGroupBox("🔧 테스트 모드")
         test_layout = QVBoxLayout(test_group)
         
         # 테스트 모드 토글
         self.test_mode_btn = QPushButton("🔴 테스트 모드 시작")
         self.test_mode_btn.clicked.connect(self.toggle_test_mode)
-        self.test_mode_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
+        self.test_mode_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 14px; padding: 10px; }")
         test_layout.addWidget(self.test_mode_btn)
         
         # 수동 탐지 섹션
-        manual_group = QGroupBox("수동 탐지")
+        manual_group = QGroupBox("⏰ 수동 탐지")
         manual_layout = QGridLayout(manual_group)
         
         # 지속 시간 설정
@@ -252,43 +392,49 @@ class ZoomAttendanceMainWindow(QMainWindow):
         # 수동 탐지 시작 버튼
         self.manual_detect_btn = QPushButton("⏰ 지정 시간 탐지 시작")
         self.manual_detect_btn.clicked.connect(self.start_manual_detection)
-        self.manual_detect_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 12px; padding: 8px; }")
+        self.manual_detect_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 12px; padding: 8px; }")
         manual_layout.addWidget(self.manual_detect_btn, 1, 0, 1, 2)
         
-        # 얼굴 수 설정 섹션
-        face_group = QGroupBox("탐지 조건")
-        face_layout = QGridLayout(face_group)
-        
-        face_layout.addWidget(QLabel("필요한 최소 얼굴 수:"), 0, 0)
-        self.face_count_spinbox = QSpinBox()
-        self.face_count_spinbox.setRange(1, 50)
-        self.face_count_spinbox.setValue(self.required_face_count)
-        self.face_count_spinbox.setSuffix("명")
-        face_layout.addWidget(self.face_count_spinbox, 0, 1)
+        test_layout.addWidget(manual_group)
+        layout.addWidget(test_group)
         
         # 설정 저장 버튼
         save_btn = QPushButton("💾 설정 저장")
         save_btn.clicked.connect(self.save_settings)
-        save_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 12px; padding: 8px; }")
-        
-        # 레이아웃 구성
-        test_layout.addWidget(manual_group)
-        test_layout.addWidget(face_group)
-        layout.addWidget(test_group)
+        save_btn.setStyleSheet("QPushButton { background-color: #673AB7; color: white; font-size: 14px; padding: 10px; }")
         layout.addWidget(save_btn)
+        
         layout.addStretch()
     
-    def create_schedule_tab(self):
+    def create_settings_tab(self):
         """
-        교시별 스케줄 설정 탭 생성
+        설정 탭 생성 - 모니터 설정과 교시 설정 통합
         """
-        schedule_tab = QWidget()
-        self.tab_widget.addTab(schedule_tab, "📅 교시 설정")
+        settings_tab = QWidget()
+        self.tab_widget.addTab(settings_tab, "⚙️ 설정")
         
-        layout = QVBoxLayout(schedule_tab)
+        layout = QVBoxLayout(settings_tab)
+        
+        # 모니터 설정 그룹
+        monitor_group = QGroupBox("📺 모니터 설정")
+        monitor_layout = QVBoxLayout(monitor_group)
+        
+        # 모니터 콤보박스
+        self.monitor_combo = QComboBox()
+        self.update_monitor_list()
+        monitor_layout.addWidget(QLabel("Zoom 실행 모니터 선택:"))
+        monitor_layout.addWidget(self.monitor_combo)
+        
+        # 모니터 변경 버튼
+        change_monitor_btn = QPushButton("🔄 모니터 변경")
+        change_monitor_btn.clicked.connect(self.change_monitor)
+        change_monitor_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 12px; padding: 8px; }")
+        monitor_layout.addWidget(change_monitor_btn)
+        
+        layout.addWidget(monitor_group)
         
         # 교시별 설정 그룹
-        schedule_group = QGroupBox("교시별 자동 촬영 설정")
+        schedule_group = QGroupBox("📅 교시별 자동 촬영 설정")
         schedule_layout = QGridLayout(schedule_group)
         
         # 전체 선택/해제 버튼
@@ -304,38 +450,243 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         layout.addLayout(select_all_layout)
         
-        # 교시별 체크박스 생성
+        # 교시별 체크박스 생성 (수정된 시간표)
         self.class_checkboxes = {}
         class_times = [
-            "09:30-10:20", "10:30-11:20", "11:30-12:20", "12:30-14:30 (점심)",
-            "14:30-15:20", "15:30-16:20", "16:30-17:20", "17:30-18:20", "18:30-19:20"
+            "09:30-10:30", "10:30-11:30", "11:30-12:30", "12:30-13:30",
+            "14:30-15:30", "15:30-16:30", "16:30-17:30", "17:30-18:30"
         ]
         
         for i in range(8):
             period = i + 1
-            if i == 3:  # 점심시간 건너뛰기
-                continue
-                
             time_text = class_times[i]
-            checkbox = QCheckBox(f"{period}교시 ({time_text})")
+            
+            # 4교시는 점심시간과 겹치므로 별도 표시
+            if period == 4:
+                checkbox = QCheckBox(f"{period}교시 ({time_text}) - 점심시간과 겹침")
+            else:
+                checkbox = QCheckBox(f"{period}교시 ({time_text})")
+                
             checkbox.setChecked(self.class_schedules.get(period, True))
             
             self.class_checkboxes[period] = checkbox
             schedule_layout.addWidget(checkbox, i // 2, i % 2)
         
-        # 점심시간 비활성화 표시
-        lunch_label = QLabel("🍽️ 점심시간 (12:30-14:30) - 자동 비활성화")
+        # 점심시간 안내
+        lunch_label = QLabel("🍽️ 점심시간 (13:30-14:30)은 자동으로 비활성화됩니다")
         lunch_label.setStyleSheet("QLabel { color: #888; font-style: italic; }")
         schedule_layout.addWidget(lunch_label, 4, 0, 1, 2)
         
-        # 설정 저장 버튼
-        save_schedule_btn = QPushButton("💾 교시 설정 저장")
-        save_schedule_btn.clicked.connect(self.save_schedule_settings)
-        save_schedule_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
-        
         layout.addWidget(schedule_group)
-        layout.addWidget(save_schedule_btn)
+        
+        # 설정 저장 버튼
+        save_settings_btn = QPushButton("💾 모든 설정 저장")
+        save_settings_btn.clicked.connect(self.save_all_settings)
+        save_settings_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
+        layout.addWidget(save_settings_btn)
+        
         layout.addStretch()
+    
+    def start_realtime_updates(self):
+        """
+        실시간 업데이트 타이머 시작
+        """
+        # 실시간 상태 업데이트 타이머 (1초마다)
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.update_realtime_status)
+        self.status_timer.start(1000)  # 1초
+        
+        # 실시간 프리뷰 업데이트 타이머 (200ms마다)
+        self.preview_timer = QTimer()
+        self.preview_timer.timeout.connect(self.update_preview)
+        self.preview_timer.start(200)  # 200ms
+    
+    def update_realtime_status(self):
+        """
+        실시간 상태 정보 업데이트
+        """
+        try:
+            # 현재 시간 업데이트
+            now = datetime.now()
+            current_time = now.strftime("%H:%M:%S")
+            current_date = now.strftime("%Y년 %m월 %d일")
+            
+            self.current_time_label.setText(current_time)
+            self.current_date_label.setText(current_date)
+            
+            # 현재 교시 확인
+            from scheduler import ClassScheduler
+            temp_scheduler = ClassScheduler()
+            is_class, class_period = temp_scheduler.is_class_time()
+            
+            if is_class:
+                self.current_class_label.setText(f"{class_period}교시 진행중")
+                self.current_class_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #4CAF50;")
+            else:
+                self.current_class_label.setText("수업 시간 아님")
+                self.current_class_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #FF5722;")
+            
+            # 모니터링 상태 업데이트
+            if hasattr(self, 'capture_thread') and self.capture_thread and self.capture_thread.running:
+                self.monitoring_status_label.setText("✅ 모니터링 중")
+                self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #4CAF50;")
+            else:
+                self.monitoring_status_label.setText("❌ 중지됨")
+                self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #F44336;")
+            
+            # 다음 자동 캡처 시간 계산
+            self.update_next_capture_time()
+            
+        except Exception as e:
+            self.logger.error(f"실시간 상태 업데이트 오류: {e}")
+    
+    def update_next_capture_time(self):
+        """
+        다음 자동 캡처 활성화 시간 업데이트
+        """
+        try:
+            from scheduler import ClassScheduler
+            temp_scheduler = ClassScheduler()
+            now = datetime.now()
+            current_time = now.time()
+            
+            # 각 교시의 35~50분 캡처 시간 확인
+            for period, (start_time, end_time) in enumerate(temp_scheduler.class_schedule, 1):
+                # 캡처 시작 시간 (교시 시작 + 35분)
+                capture_start_hour = start_time.hour
+                capture_start_minute = start_time.minute + 35
+                
+                if capture_start_minute >= 60:
+                    capture_start_hour += 1
+                    capture_start_minute -= 60
+                
+                # 캡처 종료 시간 (교시 시작 + 50분)  
+                capture_end_hour = start_time.hour
+                capture_end_minute = start_time.minute + 50
+                
+                if capture_end_minute >= 60:
+                    capture_end_hour += 1
+                    capture_end_minute -= 60
+                
+                from datetime import time
+                capture_start = time(capture_start_hour, capture_start_minute)
+                capture_end = time(capture_end_hour, capture_end_minute)
+                
+                # 현재 시간이 이 캡처 시간보다 앞에 있으면
+                if current_time < capture_start:
+                    self.next_capture_label.setText(
+                        f"다음 자동캡처 활성화\n{period}교시 {capture_start_hour:02d}:{capture_start_minute:02d}~{capture_end_hour:02d}:{capture_end_minute:02d}"
+                    )
+                    return
+                
+                # 현재 캡처 시간 중이면
+                elif capture_start <= current_time <= capture_end:
+                    remaining_minutes = (capture_end_hour * 60 + capture_end_minute) - (current_time.hour * 60 + current_time.minute)
+                    self.next_capture_label.setText(
+                        f"현재 자동캡처 활성화 중\n{period}교시 (종료까지 {remaining_minutes}분)"
+                    )
+                    return
+            
+            # 오늘 남은 캡처 시간이 없으면
+            self.next_capture_label.setText("오늘 예정된 자동캡처 없음")
+            
+        except Exception as e:
+            self.next_capture_label.setText("시간 계산 오류")
+            self.logger.error(f"다음 캡처 시간 계산 오류: {e}")
+    
+    def update_preview(self):
+        """
+        실시간 미리보기 업데이트
+        """
+        try:
+            if hasattr(self, 'capture_thread') and self.capture_thread and self.capture_thread.running:
+                # 캡처 스레드가 실행 중이면 프레임 업데이트는 시그널로 처리
+                pass
+            else:
+                # 모니터링이 중지된 상태면 기본 메시지 표시
+                if not hasattr(self, '_preview_default_set'):
+                    self.preview_label.setText("모니터링을 시작하세요")
+                    self.preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #f5f5f5; color: #666;")
+                    self._preview_default_set = True
+        except Exception as e:
+            self.logger.error(f"미리보기 업데이트 오류: {e}")
+    
+    def toggle_main_monitoring(self):
+        """
+        메인 모니터링 및 자동스케줄 원버튼 토글
+        """
+        try:
+            if hasattr(self, 'capture_thread') and self.capture_thread and self.capture_thread.running:
+                # 현재 실행 중이면 중지
+                self.stop_monitoring()
+                self.main_monitoring_btn.setText("🚀 모니터링 & 자동스케줄 시작")
+                self.main_monitoring_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 16px; padding: 15px; font-weight: bold; }")
+            else:
+                # 중지 상태면 시작
+                self.start_monitoring()
+                # 자동 스케줄러도 함께 시작
+                # TODO: 자동 스케줄러 시작 로직 추가
+                self.main_monitoring_btn.setText("🛑 모니터링 & 자동스케줄 중지")
+                self.main_monitoring_btn.setStyleSheet("QPushButton { background-color: #F44336; color: white; font-size: 16px; padding: 15px; font-weight: bold; }")
+                
+        except Exception as e:
+            self.logger.error(f"메인 모니터링 토글 오류: {e}")
+            QMessageBox.critical(self, "오류", f"모니터링 토글 중 오류가 발생했습니다:\n{e}")
+    
+    def save_all_settings(self):
+        """
+        모든 설정 저장 (교시 설정 + 기본 설정)
+        """
+        try:
+            # 기본 설정 저장
+            self.save_settings()
+            # 교시 설정 저장
+            self.save_schedule_settings()
+            QMessageBox.information(self, "저장 완료", "모든 설정이 저장되었습니다.")
+        except Exception as e:
+            self.logger.error(f"설정 저장 오류: {e}")
+            QMessageBox.critical(self, "오류", f"설정 저장 중 오류가 발생했습니다:\n{e}")
+    
+    def start_monitoring(self):
+        """
+        모니터링 시작
+        """
+        try:
+            selected_monitor = self.monitor_combo.currentData() if hasattr(self, 'monitor_combo') else 2
+            
+            self.capture_thread = CaptureThread(selected_monitor)
+            self.capture_thread.frame_ready.connect(self.update_screen)
+            self.capture_thread.original_frame_ready.connect(self.store_original_frame)
+            self.capture_thread.analysis_ready.connect(self.update_analysis)
+            self.capture_thread.error_occurred.connect(self.handle_error)
+            
+            self.capture_thread.start()
+            self.logger.info("실시간 모니터링 시작")
+            
+        except Exception as e:
+            self.logger.error(f"모니터링 시작 오류: {e}")
+            raise e
+    
+    def stop_monitoring(self):
+        """
+        모니터링 중지
+        """
+        try:
+            if hasattr(self, 'capture_thread') and self.capture_thread:
+                self.capture_thread.stop()
+                self.capture_thread.wait()
+                self.capture_thread = None
+            
+            # 미리보기 화면 초기화
+            if hasattr(self, 'preview_label'):
+                self.preview_label.setText("모니터링을 시작하세요")
+                self.preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #f5f5f5; color: #666;")
+                self._preview_default_set = True
+            
+            self.logger.info("실시간 모니터링 중지")
+            
+        except Exception as e:
+            self.logger.error(f"모니터링 중지 오류: {e}")
     
     def create_control_panel(self) -> QWidget:
         """
@@ -713,7 +1064,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def update_screen(self, frame: np.ndarray):
         """
-        화면 업데이트
+        화면 업데이트 - 메인 탭의 실시간 미리보기에 표시
         
         Args:
             frame (np.ndarray): 캡쳐된 프레임
@@ -727,13 +1078,22 @@ class ZoomAttendanceMainWindow(QMainWindow):
             bytes_per_line = ch * w
             qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
             
-            # QLabel 크기에 맞게 조정
-            label_size = self.screen_label.size()
-            scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
-                label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+            # 메인 탭의 미리보기 라벨 크기에 맞게 조정
+            if hasattr(self, 'preview_label'):
+                label_size = self.preview_label.size()
+                scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+                    label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                self.preview_label.setPixmap(scaled_pixmap)
+                self._preview_default_set = False
             
-            self.screen_label.setPixmap(scaled_pixmap)
+            # 기존 screen_label도 업데이트 (호환성)
+            if hasattr(self, 'screen_label'):
+                label_size = self.screen_label.size()
+                scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+                    label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                self.screen_label.setPixmap(scaled_pixmap)
             
         except Exception as e:
             self.logger.error(f"화면 업데이트 오류: {e}")
@@ -749,7 +1109,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def update_analysis(self, total_participants: int, face_detected: int, analysis_results: list):
         """
-        분석 결과 업데이트
+        분석 결과 업데이트 - 메인 탭 상태와 기존 상태 모두 업데이트
         
         Args:
             total_participants (int): 총 참가자 수
@@ -759,9 +1119,16 @@ class ZoomAttendanceMainWindow(QMainWindow):
         self.total_participants = total_participants
         self.face_detected_count = face_detected
         
-        # 상태 라벨 업데이트
-        self.status_labels['participants'].setText(f"참가자: {total_participants}명")
-        self.status_labels['detected'].setText(f"얼굴 감지: {face_detected}명")
+        # 메인 탭 상태 라벨 업데이트
+        if hasattr(self, 'participant_count_label'):
+            self.participant_count_label.setText(f"참여자: {total_participants}명")
+        if hasattr(self, 'face_count_label'):
+            self.face_count_label.setText(f"얼굴 감지: {face_detected}명")
+        
+        # 기존 상태 라벨 업데이트 (호환성)
+        if hasattr(self, 'status_labels'):
+            self.status_labels['participants'].setText(f"참가자: {total_participants}명")
+            self.status_labels['detected'].setText(f"얼굴 감지: {face_detected}명")
         
         if total_participants > 0:
             rate = (face_detected / total_participants) * 100

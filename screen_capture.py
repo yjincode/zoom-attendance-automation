@@ -11,6 +11,7 @@ from datetime import datetime
 import os
 from typing import Tuple, Optional
 import logging
+import threading
 
 class ScreenCapture:
     """
@@ -25,33 +26,50 @@ class ScreenCapture:
         Args:
             monitor_number (int): 캡쳐할 모니터 번호 (1=메인, 2=서브)
         """
-        self.sct = mss.mss()
         self.monitor_number = monitor_number
         self.logger = logging.getLogger(__name__)
         
-        # 사용 가능한 모니터 정보 로깅
-        monitors = self.sct.monitors
-        self.logger.info(f"사용 가능한 모니터 수: {len(monitors) - 1}")  # 0번은 전체 화면
-        for i, monitor in enumerate(monitors):
-            if i > 0:  # 0번 제외
-                self.logger.info(f"모니터 {i}: {monitor}")
+        # 스레드 로컬 저장소 (srcdc 오류 방지)
+        self._local = threading.local()
         
-        # 서브 모니터 확인
-        if monitor_number > len(monitors) - 1:
-            self.logger.warning(f"모니터 {monitor_number}가 없습니다. 모니터 1을 사용합니다.")
-            self.monitor_number = 1
+        # 초기 모니터 정보 확인 (임시 mss 인스턴스 사용)
+        with mss.mss() as temp_sct:
+            monitors = temp_sct.monitors
+            self.logger.info(f"사용 가능한 모니터 수: {len(monitors) - 1}")  # 0번은 전체 화면
+            for i, monitor in enumerate(monitors):
+                if i > 0:  # 0번 제외
+                    self.logger.info(f"모니터 {i}: {monitor}")
+            
+            # 서브 모니터 확인
+            if monitor_number > len(monitors) - 1:
+                self.logger.warning(f"모니터 {monitor_number}가 없습니다. 모니터 1을 사용합니다.")
+                self.monitor_number = 1
+    
+    def _get_sct(self):
+        """
+        스레드 로컬 mss 인스턴스 반환 (srcdc 오류 방지)
+        각 스레드마다 독립적인 mss 인스턴스를 생성하여 Windows GDI 충돌 방지
+        """
+        if not hasattr(self._local, 'sct') or self._local.sct is None:
+            self._local.sct = mss.mss()
+            self.logger.debug(f"스레드 {threading.current_thread().name}에 새 mss 인스턴스 생성")
+        return self._local.sct
     
     def capture_screen(self) -> np.ndarray:
         """
         전체 화면을 캡쳐하여 numpy 배열로 반환
+        스레드 안전성을 위해 스레드 로컬 mss 인스턴스 사용
         
         Returns:
             np.ndarray: BGR 형식의 화면 이미지
         """
         try:
+            # 스레드 로컬 mss 인스턴스 가져오기
+            sct = self._get_sct()
+            
             # 지정된 모니터의 화면 캡쳐
-            monitor = self.sct.monitors[self.monitor_number]
-            screenshot = self.sct.grab(monitor)
+            monitor = sct.monitors[self.monitor_number]
+            screenshot = sct.grab(monitor)
             
             # PIL Image로 변환
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
@@ -67,6 +85,13 @@ class ScreenCapture:
             
         except Exception as e:
             self.logger.error(f"화면 캡쳐 중 오류 발생: {e}")
+            # 스레드 로컬 mss 인스턴스 초기화 (재시도를 위해)
+            if hasattr(self._local, 'sct'):
+                try:
+                    self._local.sct.close()
+                except:
+                    pass
+                self._local.sct = None
             return np.array([])
     
     def save_screenshot(self, filepath: str) -> bool:
@@ -110,13 +135,51 @@ class ScreenCapture:
         Returns:
             dict: 모니터 정보 (width, height, top, left)
         """
-        monitor = self.sct.monitors[self.monitor_number]
+        # 스레드 로컬 mss 인스턴스 사용
+        sct = self._get_sct()
+        monitor = sct.monitors[self.monitor_number]
         return {
             'width': monitor['width'],
             'height': monitor['height'],
             'top': monitor['top'],
             'left': monitor['left']
         }
+    
+    def cleanup(self):
+        """
+        리소스 정리 - 스레드 종료 시 호출
+        """
+        try:
+            if hasattr(self._local, 'sct') and self._local.sct is not None:
+                self._local.sct.close()
+                self._local.sct = None
+                self.logger.debug(f"스레드 {threading.current_thread().name}의 mss 인스턴스 정리 완료")
+        except Exception as e:
+            self.logger.error(f"mss 인스턴스 정리 중 오류: {e}")
+    
+    def change_monitor(self, monitor_number: int):
+        """
+        모니터 변경
+        
+        Args:
+            monitor_number (int): 새로운 모니터 번호
+        """
+        old_monitor = self.monitor_number
+        self.monitor_number = monitor_number
+        
+        # 변경 확인을 위해 임시 mss 인스턴스로 모니터 존재 확인
+        try:
+            with mss.mss() as temp_sct:
+                if monitor_number > len(temp_sct.monitors) - 1:
+                    self.logger.warning(f"모니터 {monitor_number}가 없습니다. 모니터 {old_monitor}를 계속 사용합니다.")
+                    self.monitor_number = old_monitor
+                else:
+                    self.logger.info(f"모니터 변경: {old_monitor} → {monitor_number}")
+                    # 기존 스레드 로컬 인스턴스 정리 (새 모니터 정보 로드를 위해)
+                    self.cleanup()
+        except Exception as e:
+            self.logger.error(f"모니터 변경 중 오류: {e}")
+            self.monitor_number = old_monitor
 
 class ImageCandidate:
     """
