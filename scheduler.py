@@ -44,7 +44,7 @@ class ClassScheduler:
     def setup_capture_jobs(self):
         """
         각 교시별 캡쳐 작업을 스케줄러에 등록
-        각 교시의 35분~45분 사이에 캡쳐 수행
+        각 교시의 35분~40분 사이에 캡쳐 수행 (5분간)
         """
         for period, (start_time, end_time) in enumerate(self.class_schedule, 1):
             # 캡쳐 시작 시간 (교시 시작 + 35분)
@@ -56,9 +56,9 @@ class ClassScheduler:
                 capture_start_hour += 1
                 capture_start_minute -= 60
             
-            # 캡쳐 종료 시간 (교시 시작 + 45분)
+            # 캡쳐 종료 시간 (교시 시작 + 40분) - 5분간만
             capture_end_hour = start_time.hour
-            capture_end_minute = start_time.minute + 45
+            capture_end_minute = start_time.minute + 40
             
             if capture_end_minute >= 60:
                 capture_end_hour += 1
@@ -176,7 +176,7 @@ class ClassScheduler:
     
     def is_capture_time(self) -> Tuple[bool, int]:
         """
-        현재 시간이 캡쳐 시간인지 확인 (교시의 35~45분)
+        현재 시간이 캡쳐 시간인지 확인 (교시의 35~40분, 5분간)
         
         Returns:
             Tuple[bool, int]: (캡쳐시간 여부, 교시 번호)
@@ -184,9 +184,9 @@ class ClassScheduler:
         current_time = datetime.now().time()
         
         for period, (start_time, end_time) in enumerate(self.class_schedule, 1):
-            # 캡쳐 시간 계산
+            # 캡쳐 시간 계산 (35-40분)
             capture_start_minute = start_time.minute + 35
-            capture_end_minute = start_time.minute + 45
+            capture_end_minute = start_time.minute + 40
             
             capture_start_hour = start_time.hour
             capture_end_hour = start_time.hour

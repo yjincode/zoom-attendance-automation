@@ -48,7 +48,7 @@ class CaptureThread(QThread):
         super().__init__()
         self.monitor_number = monitor_number
         self.running = False
-        self.capture_interval = 1000  # 1초마다 캡쳐
+        self.capture_interval = 5000  # 5초마다 캡쳐
         self.test_mode_active = False  # 테스트 모드 플래그
         
         # 모듈 초기화
@@ -168,6 +168,10 @@ class ZoomAttendanceMainWindow(QMainWindow):
         # UI 라벨 초기화 (안전을 위한 기본값)
         self.status_labels = None
         
+        # 교시별 캡처 관리
+        self.period_capture_counts = {}  # {period: count} 각 교시별 캡처된 사진 수
+        self.max_captures_per_period = 5  # 교시당 최대 캡처 수
+        
         # 테스트 및 설정 변수
         self.test_detection_active = False
         self.manual_detection_timer = None
@@ -216,7 +220,6 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 탭 생성
         self.create_main_tab()      # 메인 모니터링
-        self.create_control_tab()   # 제어
         self.create_settings_tab()  # 설정
     
     def create_main_tab(self):
@@ -310,6 +313,30 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         layout.addWidget(next_group)
         
+        # 제어 버튼 섹션
+        control_group = QGroupBox("🎮 제어")
+        control_layout = QVBoxLayout(control_group)
+        
+        # 모니터링 시작/중지 버튼
+        self.monitor_btn = QPushButton("모니터링 시작")
+        self.monitor_btn.clicked.connect(self.toggle_monitoring)
+        self.monitor_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
+        control_layout.addWidget(self.monitor_btn)
+        
+        # 스케줄러 시작/중지 버튼
+        self.scheduler_btn = QPushButton("자동 스케줄 시작")
+        self.scheduler_btn.clicked.connect(self.toggle_scheduler)
+        self.scheduler_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 14px; padding: 10px; }")
+        control_layout.addWidget(self.scheduler_btn)
+        
+        # 테스트 캡쳐 버튼
+        test_btn = QPushButton("테스트 캡쳐")
+        test_btn.clicked.connect(self.test_capture)
+        test_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 12px; padding: 8px; }")
+        control_layout.addWidget(test_btn)
+        
+        layout.addWidget(control_group)
+        
         layout.addStretch()
         
         return panel
@@ -335,79 +362,6 @@ class ZoomAttendanceMainWindow(QMainWindow):
         layout.addWidget(preview_group)
         
         return panel
-    
-    def create_control_tab(self):
-        """
-        제어 탭 생성 - 모니터링 제어 및 테스트
-        """
-        control_tab = QWidget()
-        self.tab_widget.addTab(control_tab, "🎮 제어")
-        
-        layout = QVBoxLayout(control_tab)
-        
-        # 메인 제어 섹션
-        main_control_group = QGroupBox("📹 메인 제어")
-        main_control_layout = QVBoxLayout(main_control_group)
-        
-        # 모니터링 시작/중지 버튼 (원버튼)
-        self.main_monitoring_btn = QPushButton("🚀 모니터링 & 자동스케줄 시작")
-        self.main_monitoring_btn.clicked.connect(self.toggle_main_monitoring)
-        self.main_monitoring_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 16px; padding: 15px; font-weight: bold; }")
-        main_control_layout.addWidget(self.main_monitoring_btn)
-        
-        layout.addWidget(main_control_group)
-        
-        # 탐지 조건 설정
-        detection_group = QGroupBox("👥 탐지 조건")
-        detection_layout = QGridLayout(detection_group)
-        
-        detection_layout.addWidget(QLabel("수업 참여자 수 (강사포함):"), 0, 0)
-        self.face_count_spinbox = QSpinBox()
-        self.face_count_spinbox.setRange(1, 50)
-        self.face_count_spinbox.setValue(self.required_face_count)
-        self.face_count_spinbox.setSuffix("명")
-        detection_layout.addWidget(self.face_count_spinbox, 0, 1)
-        
-        layout.addWidget(detection_group)
-        
-        # 테스트 모드 섹션
-        test_group = QGroupBox("🔧 테스트 모드")
-        test_layout = QVBoxLayout(test_group)
-        
-        # 테스트 모드 토글
-        self.test_mode_btn = QPushButton("🔴 테스트 모드 시작")
-        self.test_mode_btn.clicked.connect(self.toggle_test_mode)
-        self.test_mode_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 14px; padding: 10px; }")
-        test_layout.addWidget(self.test_mode_btn)
-        
-        # 수동 탐지 섹션
-        manual_group = QGroupBox("⏰ 수동 탐지")
-        manual_layout = QGridLayout(manual_group)
-        
-        # 지속 시간 설정
-        manual_layout.addWidget(QLabel("탐지 시간 (초):"), 0, 0)
-        self.duration_spinbox = QSpinBox()
-        self.duration_spinbox.setRange(10, 300)
-        self.duration_spinbox.setValue(self.manual_duration)
-        self.duration_spinbox.setSuffix("초")
-        manual_layout.addWidget(self.duration_spinbox, 0, 1)
-        
-        # 수동 탐지 시작 버튼
-        self.manual_detect_btn = QPushButton("⏰ 지정 시간 탐지 시작")
-        self.manual_detect_btn.clicked.connect(self.start_manual_detection)
-        self.manual_detect_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 12px; padding: 8px; }")
-        manual_layout.addWidget(self.manual_detect_btn, 1, 0, 1, 2)
-        
-        test_layout.addWidget(manual_group)
-        layout.addWidget(test_group)
-        
-        # 설정 저장 버튼
-        save_btn = QPushButton("💾 설정 저장")
-        save_btn.clicked.connect(self.save_settings)
-        save_btn.setStyleSheet("QPushButton { background-color: #673AB7; color: white; font-size: 14px; padding: 10px; }")
-        layout.addWidget(save_btn)
-        
-        layout.addStretch()
     
     def create_settings_tab(self):
         """
@@ -435,6 +389,19 @@ class ZoomAttendanceMainWindow(QMainWindow):
         monitor_layout.addWidget(change_monitor_btn)
         
         layout.addWidget(monitor_group)
+        
+        # 탐지 조건 설정 그룹
+        detection_group = QGroupBox("👥 탐지 조건")
+        detection_layout = QGridLayout(detection_group)
+        
+        detection_layout.addWidget(QLabel("수업 참여자 수 (강사포함):"), 0, 0)
+        self.face_count_spinbox = QSpinBox()
+        self.face_count_spinbox.setRange(1, 50)
+        self.face_count_spinbox.setValue(self.required_face_count)
+        self.face_count_spinbox.setSuffix("명")
+        detection_layout.addWidget(self.face_count_spinbox, 0, 1)
+        
+        layout.addWidget(detection_group)
         
         # 교시별 설정 그룹
         schedule_group = QGroupBox("📅 교시별 자동 촬영 설정")
@@ -545,10 +512,14 @@ class ZoomAttendanceMainWindow(QMainWindow):
             if hasattr(self, 'current_date_label') and self.current_date_label:
                 self.current_date_label.setText(current_date)
             
-            # 현재 교시 확인
-            from scheduler import ClassScheduler
-            temp_scheduler = ClassScheduler()
-            is_class, class_period = temp_scheduler.is_class_time()
+            # 현재 교시 확인 (기존 스케줄러 사용)
+            if hasattr(self, 'scheduler') and self.scheduler:
+                is_class, class_period = self.scheduler.is_class_time()
+            else:
+                # 스케줄러가 없으면 임시 확인용 스케줄러 사용 (로깅 없이)
+                from scheduler import ClassScheduler
+                temp_scheduler = ClassScheduler(capture_callback=None)
+                is_class, class_period = temp_scheduler.is_class_time()
             
             # 교시 라벨 업데이트 (안전 확인)
             if hasattr(self, 'current_class_label') and self.current_class_label:
@@ -579,13 +550,19 @@ class ZoomAttendanceMainWindow(QMainWindow):
         다음 자동 캡처 활성화 시간 업데이트
         """
         try:
-            from scheduler import ClassScheduler
-            temp_scheduler = ClassScheduler()
+            # 기존 스케줄러 사용 또는 임시 스케줄러 생성
+            if hasattr(self, 'scheduler') and self.scheduler:
+                class_schedule = self.scheduler.class_schedule
+            else:
+                from scheduler import ClassScheduler
+                temp_scheduler = ClassScheduler(capture_callback=None)
+                class_schedule = temp_scheduler.class_schedule
+                
             now = datetime.now()
             current_time = now.time()
             
-            # 각 교시의 35~50분 캡처 시간 확인
-            for period, (start_time, end_time) in enumerate(temp_scheduler.class_schedule, 1):
+            # 각 교시의 35~40분 캡처 시간 확인 (5분간)
+            for period, (start_time, end_time) in enumerate(class_schedule, 1):
                 # 캡처 시작 시간 (교시 시작 + 35분)
                 capture_start_hour = start_time.hour
                 capture_start_minute = start_time.minute + 35
@@ -594,9 +571,9 @@ class ZoomAttendanceMainWindow(QMainWindow):
                     capture_start_hour += 1
                     capture_start_minute -= 60
                 
-                # 캡처 종료 시간 (교시 시작 + 50분)  
+                # 캡처 종료 시간 (교시 시작 + 40분) - 5분간만
                 capture_end_hour = start_time.hour
-                capture_end_minute = start_time.minute + 50
+                capture_end_minute = start_time.minute + 40
                 
                 if capture_end_minute >= 60:
                     capture_end_hour += 1
@@ -1110,34 +1087,93 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def scheduled_capture(self, period: int):
         """
-        스케줄된 캡쳐 실행 (원본 프레임 사용)
+        스케줄된 캡쳐 실행 (35-40분 시간대, 교시별 5장 제한)
         
         Args:
             period (int): 교시 번호
         """
+        # 해당 교시의 캡처 시간인지 확인 (35-40분)
+        if not self.is_capture_time_for_period(period):
+            return
+            
+        # 해당 교시의 캡처 제한 확인
+        if period in self.period_capture_counts:
+            if self.period_capture_counts[period] >= self.max_captures_per_period:
+                self.logger.info(f"{period}교시 캡처 완료 (5장 달성), 감지 중단")
+                return
+        else:
+            self.period_capture_counts[period] = 0
+            
         self.current_period = period
-        self.notification_system.notify_capture_start(period)
-        self.logger.info(f"{period}교시 자동 캡쳐 시작")
+        self.logger.info(f"{period}교시 자동 캡쳐 시도 ({self.period_capture_counts[period] + 1}/5)")
         
-        # 얼굴 감지 조건 확인 및 원본 프레임 저장
+        # 얼굴 감지 조건 확인 및 원본 프레임 저장 (모든 참가자가 감지된 경우만)
         if (self.current_original_frame is not None and 
-            self.face_detected_count >= self.required_face_count):
+            self.face_detected_count >= self.required_face_count and
+            self.total_participants > 0 and
+            self.face_detected_count == self.total_participants):
             
             # 원본 화면을 captures 폴더에 저장
             import os
             os.makedirs("captures", exist_ok=True)
             
-            capture_filename = f"captures/{datetime.now().strftime('%Y%m%d')}_{period}교시_{datetime.now().strftime('%H%M%S')}.png"
+            capture_count = self.period_capture_counts[period] + 1
+            capture_filename = f"captures/{datetime.now().strftime('%Y%m%d')}_{period}교시_{capture_count}.png"
             cv2.imwrite(capture_filename, self.current_original_frame)
             
-            self.logger.info(f"출석 조건 만족 - 원본 화면 저장: {capture_filename}")
+            # 캡처 카운트 증가
+            self.period_capture_counts[period] += 1
+            
+            self.logger.info(f"출석 조건 만족 - 원본 화면 저장: {capture_filename} ({self.period_capture_counts[period]}/5)")
             self.attendance_logger.log_attendance(period, [capture_filename])
+            self.notification_system.notify_capture_success(period, capture_filename)
         else:
-            self.logger.info(f"{period}교시 - 출석 조건 미달 (얼굴: {self.face_detected_count}/{self.required_face_count})")
+            self.logger.info(f"{period}교시 - 출석 조건 미달 (감지: {self.face_detected_count}/{self.total_participants})")
         
         # GUI에서 교시 표시 업데이트
         if hasattr(self, 'status_labels') and self.status_labels:
             self.status_labels['period'].setText(f"교시: {period}")
+    
+    def is_capture_time_for_period(self, period: int) -> bool:
+        """
+        해당 교시의 캡처 시간인지 확인 (35-40분)
+        
+        Args:
+            period (int): 교시 번호
+            
+        Returns:
+            bool: 캡처 시간 여부
+        """
+        if hasattr(self, 'scheduler') and self.scheduler:
+            current_time = datetime.now().time()
+            
+            # 해당 교시의 시간표 가져오기
+            if period <= len(self.scheduler.class_schedule):
+                start_time, end_time = self.scheduler.class_schedule[period - 1]
+                
+                # 캡처 시작 시간 (교시 시작 + 35분)
+                capture_start_hour = start_time.hour
+                capture_start_minute = start_time.minute + 35
+                
+                if capture_start_minute >= 60:
+                    capture_start_hour += 1
+                    capture_start_minute -= 60
+                
+                # 캡처 종료 시간 (교시 시작 + 40분)
+                capture_end_hour = start_time.hour
+                capture_end_minute = start_time.minute + 40
+                
+                if capture_end_minute >= 60:
+                    capture_end_hour += 1
+                    capture_end_minute -= 60
+                
+                from datetime import time
+                capture_start = time(capture_start_hour, capture_start_minute)
+                capture_end = time(capture_end_hour, capture_end_minute)
+                
+                return capture_start <= current_time <= capture_end
+        
+        return False
     
     def test_capture(self):
         """
