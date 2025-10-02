@@ -7,6 +7,10 @@ on:
     branches: [ main, master ]
   workflow_dispatch:  # 수동 실행 가능
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -120,7 +124,6 @@ jobs:
           dist/ZoomAttendance.exe
         draft: false
         prerelease: false
-        make_latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
