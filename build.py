@@ -196,15 +196,22 @@ a = Analysis(
         'PyQt5.QtGui',
         'cv2',
         'mtcnn',
-        'tensorflow',
         'mss',
         'numpy',
-        'pandas'
+        'pandas',
+        'tensorflow',
+        'tensorflow.python',
+        'tensorflow.python.platform',
+        'tensorflow.python.platform.build_info'
+    ],
+    excludes=[
+        'tkinter',
+        'matplotlib',
+        'scipy'
     ],
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=[],
-    excludes=[],
     noarchive=False,
 )
 
