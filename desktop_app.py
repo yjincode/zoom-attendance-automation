@@ -33,7 +33,8 @@ class CaptureThread(QThread):
     """
     
     # 시그널 정의
-    frame_ready = pyqtSignal(np.ndarray)
+    frame_ready = pyqtSignal(np.ndarray)  # 시각화된 프레임 (UI 표시용)
+    original_frame_ready = pyqtSignal(np.ndarray)  # 원본 프레임 (캡쳐 저장용)
     analysis_ready = pyqtSignal(int, int, list)  # 총 참가자, 얼굴 감지 수, 분석 결과
     error_occurred = pyqtSignal(str)
     
@@ -88,7 +89,8 @@ class CaptureThread(QThread):
                     )
                     
                     # 시그널 발송
-                    self.frame_ready.emit(visualized_frame)
+                    self.frame_ready.emit(visualized_frame)  # UI 표시용 (시각화 포함)
+                    self.original_frame_ready.emit(screenshot)  # 캡쳐 저장용 (원본)
                     self.analysis_ready.emit(total_participants, face_detected, analysis_results)
                 
                 # 지정된 간격만큼 대기
@@ -149,6 +151,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         self.is_monitoring = False
         self.total_participants = 0
         self.face_detected_count = 0
+        self.current_original_frame = None  # 캡쳐용 원본 프레임 저장
         
         # 테스트 및 설정 변수
         self.test_detection_active = False
@@ -575,6 +578,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
             
             self.capture_thread = CaptureThread(selected_monitor)
             self.capture_thread.frame_ready.connect(self.update_screen)
+            self.capture_thread.original_frame_ready.connect(self.store_original_frame)
             self.capture_thread.analysis_ready.connect(self.update_analysis)
             self.capture_thread.error_occurred.connect(self.handle_error)
             
@@ -647,7 +651,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def scheduled_capture(self, period: int):
         """
-        스케줄된 캡쳐 실행
+        스케줄된 캡쳐 실행 (원본 프레임 사용)
         
         Args:
             period (int): 교시 번호
@@ -656,28 +660,52 @@ class ZoomAttendanceMainWindow(QMainWindow):
         self.notification_system.notify_capture_start(period)
         self.logger.info(f"{period}교시 자동 캡쳐 시작")
         
+        # 얼굴 감지 조건 확인 및 원본 프레임 저장
+        if (self.current_original_frame is not None and 
+            self.face_detected_count >= self.required_face_count):
+            
+            # 원본 화면을 captures 폴더에 저장
+            import os
+            os.makedirs("captures", exist_ok=True)
+            
+            capture_filename = f"captures/{datetime.now().strftime('%Y%m%d')}_{period}교시_{datetime.now().strftime('%H%M%S')}.png"
+            cv2.imwrite(capture_filename, self.current_original_frame)
+            
+            self.logger.info(f"출석 조건 만족 - 원본 화면 저장: {capture_filename}")
+            self.attendance_logger.log_attendance(period, [capture_filename])
+        else:
+            self.logger.info(f"{period}교시 - 출석 조건 미달 (얼굴: {self.face_detected_count}/{self.required_face_count})")
+        
         # GUI에서 교시 표시 업데이트
         self.status_labels['period'].setText(f"교시: {period}")
     
     def test_capture(self):
         """
-        테스트 캡쳐 실행
+        테스트 캡쳐 실행 (원본 프레임 사용)
         """
         try:
-            selected_monitor = self.monitor_combo.currentData() or 2
-            capturer = ScreenCapture(selected_monitor)
-            
-            screenshot = capturer.capture_screen()
-            if screenshot.size > 0:
-                # 테스트 이미지 저장
+            if self.current_original_frame is not None:
+                # 현재 저장된 원본 프레임 사용
                 test_file = f"test_capture_{datetime.now().strftime('%H%M%S')}.png"
-                cv2.imwrite(test_file, screenshot)
+                cv2.imwrite(test_file, self.current_original_frame)
                 
-                self.logger.info(f"테스트 캡쳐 완료: {test_file}")
-                QMessageBox.information(self, "테스트 완료", f"테스트 캡쳐가 완료되었습니다.\n파일: {test_file}")
+                self.logger.info(f"테스트 캡쳐 완료: {test_file} (원본 화면)")
+                QMessageBox.information(self, "테스트 완료", f"테스트 캡쳐가 완료되었습니다.\n파일: {test_file}\n(시각화 효과 제외한 원본 화면)")
             else:
-                self.logger.error("테스트 캡쳐 실패")
-                QMessageBox.warning(self, "테스트 실패", "화면 캡쳐에 실패했습니다.")
+                # 모니터링이 실행되지 않은 경우 직접 캡쳐
+                selected_monitor = self.monitor_combo.currentData() or 2
+                capturer = ScreenCapture(selected_monitor)
+                
+                screenshot = capturer.capture_screen()
+                if screenshot.size > 0:
+                    test_file = f"test_capture_{datetime.now().strftime('%H%M%S')}.png"
+                    cv2.imwrite(test_file, screenshot)
+                    
+                    self.logger.info(f"테스트 캡쳐 완료: {test_file}")
+                    QMessageBox.information(self, "테스트 완료", f"테스트 캡쳐가 완료되었습니다.\n파일: {test_file}")
+                else:
+                    self.logger.error("테스트 캡쳐 실패")
+                    QMessageBox.warning(self, "테스트 실패", "화면 캡쳐에 실패했습니다.")
                 
         except Exception as e:
             self.logger.error(f"테스트 캡쳐 오류: {e}")
@@ -709,6 +737,15 @@ class ZoomAttendanceMainWindow(QMainWindow):
             
         except Exception as e:
             self.logger.error(f"화면 업데이트 오류: {e}")
+    
+    def store_original_frame(self, frame: np.ndarray):
+        """
+        원본 프레임 저장 (시각화 없는 버전)
+        
+        Args:
+            frame (np.ndarray): 원본 캡쳐된 프레임
+        """
+        self.current_original_frame = frame.copy()
     
     def update_analysis(self, total_participants: int, face_detected: int, analysis_results: list):
         """
