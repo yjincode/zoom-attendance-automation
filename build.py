@@ -173,14 +173,15 @@ class ZoomAttendanceBuilder:
         """
         새로운 spec 파일 생성
         """
-        # 아이콘 경로 설정
-        assets_dir = self.project_dir / "assets"
+        # 아이콘 경로 설정 (상대 경로 사용)
         if self.system == "Windows":
-            icon_path = assets_dir / "icon.ico"
+            icon_path = "assets/icon.ico"
         else:
-            icon_path = assets_dir / "icon.png"
+            icon_path = "assets/icon.png"
         
-        icon_line = f"icon='{icon_path}'," if icon_path.exists() else "# icon=None,"
+        # 아이콘 파일 존재 확인
+        full_icon_path = self.project_dir / icon_path
+        icon_line = f"icon='{icon_path}'," if full_icon_path.exists() else "# icon=None,"
         
         spec_content = f"""# -*- mode: python ; coding: utf-8 -*-
 
