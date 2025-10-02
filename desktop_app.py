@@ -479,13 +479,38 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         layout.addWidget(schedule_group)
         
+        # 로그 섹션
+        log_group = QGroupBox("📋 시스템 로그")
+        log_layout = QVBoxLayout(log_group)
+        
+        self.log_text = QTextEdit()
+        self.log_text.setMaximumHeight(150)
+        self.log_text.setReadOnly(True)
+        self.log_text.setStyleSheet("font-family: 'Consolas', 'Monaco', monospace; font-size: 10px;")
+        log_layout.addWidget(self.log_text)
+        
+        # 로그 제어 버튼
+        log_btn_layout = QHBoxLayout()
+        clear_log_btn = QPushButton("🗑️ 로그 지우기")
+        clear_log_btn.clicked.connect(self.clear_log)
+        clear_log_btn.setStyleSheet("QPushButton { background-color: #FF5722; color: white; font-size: 12px; padding: 5px; }")
+        
+        refresh_log_btn = QPushButton("🔄 로그 새로고침")
+        refresh_log_btn.clicked.connect(self.refresh_log)
+        refresh_log_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 12px; padding: 5px; }")
+        
+        log_btn_layout.addWidget(clear_log_btn)
+        log_btn_layout.addWidget(refresh_log_btn)
+        log_btn_layout.addStretch()
+        
+        log_layout.addLayout(log_btn_layout)
+        layout.addWidget(log_group)
+        
         # 설정 저장 버튼
         save_settings_btn = QPushButton("💾 모든 설정 저장")
         save_settings_btn.clicked.connect(self.save_all_settings)
         save_settings_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
         layout.addWidget(save_settings_btn)
-        
-        layout.addStretch()
     
     def start_realtime_updates(self):
         """
@@ -688,6 +713,53 @@ class ZoomAttendanceMainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"모니터링 중지 오류: {e}")
     
+    def clear_log(self):
+        """
+        GUI 로그 창 내용 지우기
+        """
+        if hasattr(self, 'log_text') and self.log_text:
+            self.log_text.clear()
+            self.logger.info("GUI 로그 창이 지워졌습니다")
+    
+    def refresh_log(self):
+        """
+        로그 파일에서 최근 로그를 다시 읽어와 표시
+        """
+        try:
+            if hasattr(self, 'log_text') and self.log_text:
+                # 현재 로그 창 내용 지우기
+                self.log_text.clear()
+                
+                # 로그 파일에서 최근 50줄 읽기
+                log_file_path = 'zoom_attendance_gui.log'
+                if os.path.exists(log_file_path):
+                    with open(log_file_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                        # 최근 50줄만 표시
+                        recent_lines = lines[-50:] if len(lines) > 50 else lines
+                        for line in recent_lines:
+                            # 시간 포맷 조정
+                            formatted_line = line.strip()
+                            if ' - ' in formatted_line:
+                                parts = formatted_line.split(' - ', 2)
+                                if len(parts) >= 3:
+                                    time_part = parts[0].split(' ')[1] if ' ' in parts[0] else parts[0]
+                                    level_part = parts[1]
+                                    msg_part = parts[2]
+                                    formatted_line = f"[{time_part}] {level_part} - {msg_part}"
+                            self.log_text.append(formatted_line)
+                    
+                    # 스크롤을 맨 아래로
+                    cursor = self.log_text.textCursor()
+                    cursor.movePosition(cursor.End)
+                    self.log_text.setTextCursor(cursor)
+                else:
+                    self.log_text.append("[INFO] 로그 파일이 없습니다.")
+                    
+        except Exception as e:
+            if hasattr(self, 'log_text') and self.log_text:
+                self.log_text.append(f"[ERROR] 로그 새로고침 실패: {e}")
+    
     def create_control_panel(self) -> QWidget:
         """
         컨트롤 패널 생성
@@ -855,31 +927,49 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def setup_logging(self):
         """
-        로깅 시스템 설정
+        로깅 시스템 설정 (파일 + GUI 로깅)
         """
-        # GUI 로그 핸들러 생성
-        class GuiLogHandler(logging.Handler):
-            def __init__(self, text_widget):
-                super().__init__()
-                self.text_widget = text_widget
+        # 기본 파일 로깅 설정
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('zoom_attendance_gui.log', encoding='utf-8'),
+                logging.StreamHandler()  # 콘솔 출력
+            ]
+        )
+        
+        # GUI 로그 핸들러 추가 (log_text가 존재하는 경우에만)
+        if hasattr(self, 'log_text') and self.log_text is not None:
+            class GuiLogHandler(logging.Handler):
+                def __init__(self, text_widget):
+                    super().__init__()
+                    self.text_widget = text_widget
+                
+                def emit(self, record):
+                    try:
+                        msg = self.format(record)
+                        timestamp = datetime.now().strftime('%H:%M:%S')
+                        self.text_widget.append(f"[{timestamp}] {msg}")
+                        # 스크롤을 맨 아래로
+                        cursor = self.text_widget.textCursor()
+                        cursor.movePosition(cursor.End)
+                        self.text_widget.setTextCursor(cursor)
+                    except Exception:
+                        pass  # GUI 오류 시 무시
             
-            def emit(self, record):
-                msg = self.format(record)
-                self.text_widget.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-                # 스크롤을 맨 아래로
-                self.text_widget.moveCursor(self.text_widget.textCursor().End)
-        
-        # 핸들러 추가
-        gui_handler = GuiLogHandler(self.log_text)
-        gui_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(levelname)s - %(message)s')
-        gui_handler.setFormatter(formatter)
-        
-        # 루트 로거에 추가
-        logging.getLogger().addHandler(gui_handler)
+            # GUI 핸들러 추가
+            gui_handler = GuiLogHandler(self.log_text)
+            gui_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(levelname)s - %(message)s')
+            gui_handler.setFormatter(formatter)
+            
+            # 루트 로거에 추가
+            root_logger = logging.getLogger()
+            root_logger.addHandler(gui_handler)
         
         self.logger = logging.getLogger(__name__)
-        self.logger.info("Zoom 출석 자동화 시스템 시작")
+        self.logger.info("Zoom 출석 자동화 프로그램 시작")
     
     def update_monitor_list(self):
         """
