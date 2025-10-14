@@ -63,7 +63,7 @@ class CaptureThread(QThread):
         스레드 실행
         """
         self.running = True
-        
+
         while self.running:
             try:
                 # 화면 캡쳐 (srcdc 오류 방지를 위한 추가 예외 처리)
@@ -71,38 +71,48 @@ class CaptureThread(QThread):
                     screenshot = self.screen_capturer.capture_screen()
                 except Exception as capture_error:
                     self.logger.warning(f"화면 캡쳐 일시 실패, 재시도: {capture_error}")
+                    self.error_occurred.emit(f"화면 캡쳐 실패: {capture_error}")
                     self.msleep(500)  # 0.5초 대기 후 재시도
                     continue
-                
+
                 if screenshot is not None and screenshot.size > 0:
-                    # 테스트 모드일 때 강제 탐지 활성화
-                    if self.test_mode_active:
-                        # 강제로 얼굴 탐지 모델 로드
-                        self.zoom_detector.face_detector._load_model()
-                    
-                    # Zoom 참가자 분석
-                    analysis_results, total_participants, face_detected = \
-                        self.zoom_detector.detect_and_analyze_all(screenshot, force_detection=self.test_mode_active)
-                    
-                    # 시각화 적용
-                    visualized_frame = self.visualizer.draw_participant_boxes(
-                        screenshot, analysis_results
-                    )
-                    visualized_frame = self.visualizer.draw_summary_info(
-                        visualized_frame, total_participants, face_detected,
-                        datetime.now().strftime("%H:%M:%S")
-                    )
-                    
-                    # 시그널 발송
-                    self.frame_ready.emit(visualized_frame)  # UI 표시용 (시각화 포함)
-                    self.original_frame_ready.emit(screenshot)  # 캡쳐 저장용 (원본)
-                    self.analysis_ready.emit(total_participants, face_detected, analysis_results)
-                
+                    try:
+                        # 테스트 모드일 때 강제 탐지 활성화
+                        if self.test_mode_active:
+                            # 강제로 얼굴 탐지 모델 로드
+                            self.zoom_detector.face_detector._load_model()
+
+                        # Zoom 참가자 분석
+                        analysis_results, total_participants, face_detected = \
+                            self.zoom_detector.detect_and_analyze_all(screenshot, force_detection=self.test_mode_active)
+
+                        # 시각화 적용
+                        visualized_frame = self.visualizer.draw_participant_boxes(
+                            screenshot, analysis_results
+                        )
+                        visualized_frame = self.visualizer.draw_summary_info(
+                            visualized_frame, total_participants, face_detected,
+                            datetime.now().strftime("%H:%M:%S")
+                        )
+
+                        # 시그널 발송
+                        self.frame_ready.emit(visualized_frame)  # UI 표시용 (시각화 포함)
+                        self.original_frame_ready.emit(screenshot)  # 캡쳐 저장용 (원본)
+                        self.analysis_ready.emit(total_participants, face_detected, analysis_results)
+
+                    except Exception as analysis_error:
+                        self.logger.error(f"분석 중 오류: {analysis_error}", exc_info=True)
+                        self.error_occurred.emit(f"분석 오류: {analysis_error}")
+                        # 분석 실패해도 원본 프레임은 표시
+                        self.frame_ready.emit(screenshot)
+                        self.original_frame_ready.emit(screenshot)
+
                 # 지정된 간격만큼 대기
                 self.msleep(self.capture_interval)
-                
+
             except Exception as e:
-                self.error_occurred.emit(str(e))
+                self.logger.error(f"캡쳐 스레드 오류: {e}", exc_info=True)
+                self.error_occurred.emit(f"스레드 오류: {e}")
                 self.msleep(5000)  # 오류 시 5초 대기
     
     def stop(self):
@@ -301,17 +311,32 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         layout.addWidget(monitoring_group)
         
-        # 다음 자동 캡처 시간
-        next_group = QGroupBox("⏰ 다음 자동캡처")
-        next_layout = QVBoxLayout(next_group)
-        
-        self.next_capture_label = QLabel("대기 중...")
-        self.next_capture_label.setAlignment(Qt.AlignCenter)
-        self.next_capture_label.setStyleSheet("font-size: 12px; color: #666;")
-        self.next_capture_label.setWordWrap(True)
-        next_layout.addWidget(self.next_capture_label)
-        
-        layout.addWidget(next_group)
+        # 스케줄 진행상황 (상세 정보)
+        schedule_group = QGroupBox("📋 스케줄 진행상황")
+        schedule_layout = QVBoxLayout(schedule_group)
+
+        # 현재 교시 진행상황
+        self.schedule_current_label = QLabel("대기 중...")
+        self.schedule_current_label.setAlignment(Qt.AlignCenter)
+        self.schedule_current_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #2196F3;")
+        self.schedule_current_label.setWordWrap(True)
+        schedule_layout.addWidget(self.schedule_current_label)
+
+        # 현재 시도 진행상황
+        self.schedule_attempt_label = QLabel("")
+        self.schedule_attempt_label.setAlignment(Qt.AlignCenter)
+        self.schedule_attempt_label.setStyleSheet("font-size: 11px; color: #666;")
+        self.schedule_attempt_label.setWordWrap(True)
+        schedule_layout.addWidget(self.schedule_attempt_label)
+
+        # 다음 시도 정보
+        self.schedule_next_label = QLabel("")
+        self.schedule_next_label.setAlignment(Qt.AlignCenter)
+        self.schedule_next_label.setStyleSheet("font-size: 11px; color: #999;")
+        self.schedule_next_label.setWordWrap(True)
+        schedule_layout.addWidget(self.schedule_next_label)
+
+        layout.addWidget(schedule_group)
         
         # 제어 버튼 섹션
         control_group = QGroupBox("🎮 제어")
@@ -539,12 +564,120 @@ class ZoomAttendanceMainWindow(QMainWindow):
                     self.monitoring_status_label.setText("❌ 중지됨")
                     self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #F44336;")
             
-            # 다음 자동 캡처 시간 계산
-            self.update_next_capture_time()
-            
+            # 스케줄 진행상황 업데이트
+            self.update_schedule_progress()
+
         except Exception as e:
             self.logger.error(f"실시간 상태 업데이트 오류: {e}")
     
+    def update_schedule_progress(self):
+        """
+        스케줄 진행상황 업데이트 (상세 정보 표시)
+        """
+        try:
+            if not hasattr(self, 'scheduler') or not self.scheduler:
+                # 스케줄러가 없으면 대기 상태
+                if hasattr(self, 'schedule_current_label'):
+                    self.schedule_current_label.setText("자동 스케줄 대기 중")
+                if hasattr(self, 'schedule_attempt_label'):
+                    self.schedule_attempt_label.setText("")
+                if hasattr(self, 'schedule_next_label'):
+                    self.schedule_next_label.setText("")
+                return
+
+            from scheduler import ClassScheduler
+            now = datetime.now()
+            current_time = now.time()
+            class_schedule = self.scheduler.class_schedule
+
+            # 각 교시의 캡처 시간 확인 (35~40분, 5분간)
+            for period, (start_time, end_time) in enumerate(class_schedule, 1):
+                # 캡처 시작/종료 시간 계산
+                capture_start_hour = start_time.hour
+                capture_start_minute = start_time.minute + 35
+                if capture_start_minute >= 60:
+                    capture_start_hour += 1
+                    capture_start_minute -= 60
+
+                capture_end_hour = start_time.hour
+                capture_end_minute = start_time.minute + 40
+                if capture_end_minute >= 60:
+                    capture_end_hour += 1
+                    capture_end_minute -= 60
+
+                from datetime import time
+                capture_start = time(capture_start_hour, capture_start_minute)
+                capture_end = time(capture_end_hour, capture_end_minute)
+
+                # 현재 캡처 시간 중인 경우
+                if capture_start <= current_time <= capture_end:
+                    elapsed_minutes = (current_time.hour * 60 + current_time.minute) - \
+                                    (capture_start_hour * 60 + capture_start_minute)
+                    remaining_minutes = (capture_end_hour * 60 + capture_end_minute) - \
+                                      (current_time.hour * 60 + current_time.minute)
+
+                    # 현재 교시의 캡처 시도 횟수 확인
+                    current_attempts = self.period_capture_counts.get(period, 0)
+                    max_attempts = self.max_captures_per_period
+
+                    if hasattr(self, 'schedule_current_label'):
+                        self.schedule_current_label.setText(
+                            f"📸 {period}교시 촬영 중 ({current_attempts}/{max_attempts}장)"
+                        )
+
+                    if hasattr(self, 'schedule_attempt_label'):
+                        self.schedule_attempt_label.setText(
+                            f"진행: {elapsed_minutes}분 경과 / {remaining_minutes}분 남음"
+                        )
+
+                    if hasattr(self, 'schedule_next_label'):
+                        if current_attempts >= max_attempts:
+                            self.schedule_next_label.setText(
+                                f"✅ {period}교시 완료 (목표 달성)"
+                            )
+                        else:
+                            self.schedule_next_label.setText(
+                                f"다음 시도: 얼굴 감지 시 자동 촬영"
+                            )
+                    return
+
+                # 다가오는 캡처 시간인 경우
+                if current_time < capture_start:
+                    time_until_start = (capture_start_hour * 60 + capture_start_minute) - \
+                                     (current_time.hour * 60 + current_time.minute)
+
+                    if hasattr(self, 'schedule_current_label'):
+                        self.schedule_current_label.setText(
+                            f"⏰ 다음: {period}교시 ({time_until_start}분 후)"
+                        )
+
+                    if hasattr(self, 'schedule_attempt_label'):
+                        self.schedule_attempt_label.setText(
+                            f"촬영 시작: {capture_start_hour:02d}:{capture_start_minute:02d}"
+                        )
+
+                    if hasattr(self, 'schedule_next_label'):
+                        self.schedule_next_label.setText(
+                            f"촬영 기간: 5분간 (목표 {self.max_captures_per_period}장)"
+                        )
+                    return
+
+            # 오늘 모든 스케줄 종료
+            if hasattr(self, 'schedule_current_label'):
+                self.schedule_current_label.setText("📅 오늘 스케줄 종료")
+            if hasattr(self, 'schedule_attempt_label'):
+                total_captures = sum(self.period_capture_counts.values())
+                self.schedule_attempt_label.setText(
+                    f"총 {total_captures}장 촬영 완료"
+                )
+            if hasattr(self, 'schedule_next_label'):
+                self.schedule_next_label.setText("내일 다시 시작됩니다")
+
+        except Exception as e:
+            self.logger.error(f"스케줄 진행상황 업데이트 오류: {e}")
+            if hasattr(self, 'schedule_current_label'):
+                self.schedule_current_label.setText("진행상황 확인 오류")
+
     def update_next_capture_time(self):
         """
         다음 자동 캡처 활성화 시간 업데이트
