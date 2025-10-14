@@ -1,7 +1,8 @@
 """
 메모리 효율적인 얼굴 감지 모듈
-OpenCV DNN 기반 사전 훈련된 모델 사용
-순수 OpenCV만 사용하여 외부 의존성 없이 고성능 얼굴 감지 제공
+YuNet 기반 고정확도 얼굴 탐지 (OpenCV 4.5.4+)
+순수 OpenCV만 사용하여 TensorFlow 없이 안정적 실행
+Windows 호환성 우수, 얼굴 랜드마크 5개 포인트 제공
 """
 
 import cv2
@@ -18,113 +19,103 @@ from pathlib import Path
 
 class FaceDetector:
     """
-    OpenCV DNN 기반 얼굴 탐지 클래스
-    사전 훈련된 DNN 모델을 사용하여 고성능 얼굴 감지 제공
-    순수 OpenCV만 사용하여 외부 의존성 없이 안정적 실행
+    YuNet 기반 고정확도 얼굴 탐지 클래스
+    OpenCV 4.5.4+ 내장 YuNet 모델 사용
+    TensorFlow 불필요, Windows에서 안정적, 얼굴 랜드마크 5개 포인트 제공
     """
-    
-    def __init__(self, min_detection_confidence=0.5):
+
+    def __init__(self, min_detection_confidence=0.6):
         """
-        얼굴 탐지기 초기화
-        
+        YuNet 얼굴 탐지기 초기화
+
         Args:
             min_detection_confidence (float): 최소 탐지 신뢰도 (0.0~1.0)
         """
         self.min_detection_confidence = min_detection_confidence
         self.logger = logging.getLogger(__name__)
-        
-        # OpenCV DNN 모델 관련
-        self.net = None
+
+        # YuNet 모델 관련
+        self.detector = None
         self.is_model_loaded = False
         self.last_detection_time = None
         self.detection_active = False
         self.detection_thread = None
         self.detection_lock = threading.Lock()
-        
+
         # 모델 파일 경로
         self.model_dir = Path(__file__).parent / "models"
         self.model_dir.mkdir(exist_ok=True)
-        
+
         # 탐지 스케줄 설정
         self.detection_interval = 60  # 1분마다
         self.detection_duration = 15  # 15초간 활성화
-        
+
+        # YuNet 입력 크기
+        self.input_size = (320, 320)
+
         # 초기화 시 모델 로드
         self._load_model()
-        
-        self.logger.info("OpenCV DNN 기반 얼굴 탐지기 초기화 완료")
+
+        self.logger.info("YuNet 고정확도 얼굴 탐지기 초기화 완료")
     
     def _load_model(self):
         """
-        OpenCV DNN Face Detection 모델 로드
+        YuNet ONNX 모델 로드
         """
         try:
             if not self.is_model_loaded:
-                self.logger.info("OpenCV DNN Face Detection 모델 로딩 중...")
-                
+                self.logger.info("YuNet 모델 로딩 중...")
+
                 # 모델 파일 다운로드 (필요시)
-                self._download_model_files()
-                
-                # DNN 모델 로드
-                prototxt_path = self.model_dir / "deploy.prototxt"
-                model_path = self.model_dir / "res10_300x300_ssd_iter_140000.caffemodel"
-                
-                if prototxt_path.exists() and model_path.exists():
-                    self.net = cv2.dnn.readNetFromCaffe(str(prototxt_path), str(model_path))
+                model_path = self._download_yunet_model()
+
+                if model_path.exists():
+                    # YuNet 검출기 생성
+                    self.detector = cv2.FaceDetectorYN.create(
+                        str(model_path),
+                        "",  # config (불필요)
+                        self.input_size,
+                        score_threshold=self.min_detection_confidence,
+                        nms_threshold=0.3,
+                        top_k=5000
+                    )
                     self.is_model_loaded = True
-                    self.logger.info("OpenCV DNN Face Detection 모델 로드 완료")
+                    self.logger.info("YuNet 모델 로드 완료 (고정확도 모드)")
                 else:
-                    raise Exception("모델 파일을 찾을 수 없습니다")
-                
+                    raise Exception("YuNet 모델 파일을 찾을 수 없습니다")
+
         except Exception as e:
-            self.logger.error(f"OpenCV DNN 모델 로드 실패: {e}")
+            self.logger.error(f"YuNet 모델 로드 실패: {e}")
             self.is_model_loaded = False
-    
-    def _download_model_files(self):
+
+    def _download_yunet_model(self) -> Path:
         """
-        사전 훈련된 DNN 모델 파일 다운로드
+        YuNet ONNX 모델 다운로드 (~2.8MB)
         """
-        model_urls = {
-            "deploy.prototxt": "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt",
-            "res10_300x300_ssd_iter_140000.caffemodel": "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
-        }
-        
-        for filename, url in model_urls.items():
-            filepath = self.model_dir / filename
-            
-            if not filepath.exists():
-                try:
-                    self.logger.info(f"모델 파일 다운로드 중: {filename}")
-                    urllib.request.urlretrieve(url, filepath)
-                    self.logger.info(f"다운로드 완료: {filename}")
-                except Exception as e:
-                    self.logger.error(f"모델 파일 다운로드 실패 {filename}: {e}")
-                    # 내장된 기본 모델 파라미터 사용
-                    self._create_fallback_model(filename)
-    
-    def _create_fallback_model(self, filename):
-        """
-        네트워크 문제로 다운로드 실패 시 Haar Cascade 폴백
-        """
-        if filename == "deploy.prototxt":
-            # 간단한 prototxt 내용 생성 (실제로는 Haar Cascade 사용)
-            self.logger.info("네트워크 오류로 인해 Haar Cascade 폴백 모드 사용")
-            self.use_haar_fallback = True
+        model_filename = "face_detection_yunet_2023mar.onnx"
+        model_path = self.model_dir / model_filename
+
+        if not model_path.exists():
+            try:
+                self.logger.info(f"YuNet 모델 다운로드 중: {model_filename}")
+                url = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+                urllib.request.urlretrieve(url, model_path)
+                self.logger.info(f"다운로드 완료: {model_filename} (2.8MB)")
+            except Exception as e:
+                self.logger.error(f"YuNet 모델 다운로드 실패: {e}")
+
+        return model_path
         
     def _unload_model(self):
         """
-        OpenCV DNN 모델 언로드 (메모리 절약)
+        YuNet 모델 언로드 (메모리 절약)
         """
         try:
             if self.is_model_loaded:
-                self.net = None
+                self.detector = None
                 self.is_model_loaded = False
-                
-                # 가비지 컬렉션 강제 실행
                 gc.collect()
-                
-                self.logger.info("OpenCV DNN 모델 언로드 완료 - 메모리 절약")
-                
+                self.logger.info("YuNet 모델 언로드 완료 - 메모리 절약")
         except Exception as e:
             self.logger.error(f"모델 언로드 중 오류: {e}")
     
@@ -192,8 +183,8 @@ class FaceDetector:
                         self._end_detection_cycle
                     )
                     self.detection_thread.start()
-                    
-                    self.logger.info("얼굴 감지 활성화 (15초간)")
+
+                    self.logger.info("얼굴 감지 활성화 (15초간 - YuNet 고정확도)")
     
     def _end_detection_cycle(self):
         """
@@ -207,95 +198,95 @@ class FaceDetector:
         
     def detect_faces(self, image: np.ndarray, force_detection: bool = False) -> List[dict]:
         """
-        이미지에서 얼굴을 탐지
+        이미지에서 얼굴을 탐지 (YuNet 사용)
         메모리 효율성을 위해 탐지 시간에만 작동
-        
+
         Args:
             image (np.ndarray): BGR 형식의 이미지
             force_detection (bool): 강제 탐지 모드 (테스트용)
-            
+
         Returns:
             List[dict]: 탐지된 얼굴 정보 리스트
                        각 dict는 'box', 'confidence', 'keypoints' 키를 포함
+                       keypoints: right_eye, left_eye, nose, right_mouth, left_mouth
         """
         try:
             # 강제 탐지 모드가 아니고 탐지 시간이 아니면 빈 결과 반환
             if not force_detection and not self.should_activate_detection():
                 return []
-            
+
             # 강제 탐지 모드일 때는 즉시 모델 로드
             if force_detection:
                 if not self.is_model_loaded:
                     self._load_model()
             else:
-                # 탐지 사이클 시작 (필요시 모델 로드)
                 self.start_detection_cycle()
-            
+
             # 모델이 로드되지 않았으면 빈 결과 반환
-            if not self.is_model_loaded or self.net is None:
+            if not self.is_model_loaded or self.detector is None:
                 return []
-            
+
             with self.detection_lock:
                 if not self.detection_active and not force_detection:
                     return []
-                
-                # 이미지 전처리
+
+                # 이미지 크기 설정 (YuNet은 동적 입력 크기 지원)
                 h, w = image.shape[:2]
-                blob = cv2.dnn.blobFromImage(image, 1.0, (300, 300), [104, 117, 123])
-                
-                # DNN 추론 수행
-                self.net.setInput(blob)
-                detections = self.net.forward()
-                
+                self.detector.setInputSize((w, h))
+
+                # YuNet 추론 수행
+                _, faces_raw = self.detector.detect(image)
+
                 faces = []
-                for i in range(detections.shape[2]):
-                    confidence = detections[0, 0, i, 2]
-                    
-                    # 신뢰도 임계값 확인
-                    if confidence > self.min_detection_confidence:
-                        # 바운딩 박스 계산
-                        x1 = int(detections[0, 0, i, 3] * w)
-                        y1 = int(detections[0, 0, i, 4] * h)
-                        x2 = int(detections[0, 0, i, 5] * w)
-                        y2 = int(detections[0, 0, i, 6] * h)
-                        
-                        # 박스 크기 및 위치 검증
-                        if x1 >= 0 and y1 >= 0 and x2 <= w and y2 <= h and x2 > x1 and y2 > y1:
+                if faces_raw is not None:
+                    for face_data in faces_raw:
+                        # YuNet 출력 형식: [x, y, w, h, x_re, y_re, x_le, y_le, x_nt, y_nt, x_rcm, y_rcm, x_lcm, y_lcm, score]
+                        x, y, w_box, h_box = face_data[0:4].astype(int)
+                        confidence = float(face_data[14])
+
+                        # 랜드마크 5개 포인트 (YuNet의 강점!)
+                        landmarks = {
+                            'right_eye': (int(face_data[4]), int(face_data[5])),
+                            'left_eye': (int(face_data[6]), int(face_data[7])),
+                            'nose': (int(face_data[8]), int(face_data[9])),
+                            'right_mouth': (int(face_data[10]), int(face_data[11])),
+                            'left_mouth': (int(face_data[12]), int(face_data[13]))
+                        }
+
+                        # 박스 검증
+                        if x >= 0 and y >= 0 and x + w_box <= w and y + h_box <= h:
                             faces.append({
-                                'box': [x1, y1, x2 - x1, y2 - y1],
-                                'confidence': float(confidence),
-                                'keypoints': {}  # DNN 모델은 키포인트 제공하지 않음
+                                'box': [x, y, w_box, h_box],
+                                'confidence': confidence,
+                                'keypoints': landmarks
                             })
-                
-                self.logger.debug(f"탐지된 얼굴 수: {len(faces)}")
+
+                self.logger.debug(f"YuNet 탐지된 얼굴 수: {len(faces)}")
                 return faces
-            
+
         except Exception as e:
-            self.logger.error(f"얼굴 탐지 중 오류 발생: {e}")
+            self.logger.error(f"YuNet 얼굴 탐지 중 오류 발생: {e}")
             return []
     
-    def has_faces(self, image: np.ndarray, confidence_threshold=0.9, force_detection: bool = False) -> bool:
+    def has_faces(self, image: np.ndarray, confidence_threshold=0.7, force_detection: bool = False) -> bool:
         """
-        이미지에 얼굴이 있는지 확인
+        이미지에 얼굴이 있는지 확인 (YuNet 사용)
         메모리 효율성을 위해 탐지 시간에만 실제 검사 수행
-        
+
         Args:
             image (np.ndarray): BGR 형식의 이미지
-            confidence_threshold (float): 얼굴 탐지 신뢰도 임계값
+            confidence_threshold (float): 얼굴 탐지 신뢰도 임계값 (YuNet 최적값: 0.7)
             force_detection (bool): 강제 탐지 모드
-            
+
         Returns:
-            bool: 얼굴이 탐지되면 True, 아니면 False
+            bool: 얼굴이 탐지되면 True
         """
-        # 강제 탐지 모드가 아니고 탐지 시간이 아니면 False 반환 (메모리 절약)
         if not force_detection and not self.should_activate_detection():
             return False
-        
+
         faces = self.detect_faces(image, force_detection=force_detection)
-        
-        # 신뢰도가 임계값 이상인 얼굴이 하나 이상 있는지 확인
         valid_faces = [face for face in faces if face['confidence'] >= confidence_threshold]
-        
+
         return len(valid_faces) > 0
     
     def force_detection(self, image: np.ndarray) -> List[dict]:
@@ -313,7 +304,7 @@ class FaceDetector:
     def get_memory_status(self) -> dict:
         """
         현재 메모리 상태 및 탐지 상태 반환
-        
+
         Returns:
             dict: 상태 정보
         """
@@ -322,7 +313,8 @@ class FaceDetector:
             'detection_active': self.detection_active,
             'is_detection_time': self.is_detection_time(),
             'should_activate': self.should_activate_detection(),
-            'last_detection': self.last_detection_time.isoformat() if self.last_detection_time else None
+            'last_detection': self.last_detection_time.isoformat() if self.last_detection_time else None,
+            'model_type': 'YuNet (High Accuracy)'
         }
     
     def cleanup(self):
@@ -337,59 +329,65 @@ class FaceDetector:
             # 모델 언로드
             self._unload_model()
             
-            self.logger.info("얼굴 탐지기 리소스 정리 완료")
+            self.logger.info("YuNet 탐지기 리소스 정리 완료")
             
         except Exception as e:
             self.logger.error(f"리소스 정리 중 오류: {e}")
     
     def draw_faces(self, image: np.ndarray, save_path: Optional[str] = None, force: bool = False) -> np.ndarray:
         """
-        탐지된 얼굴에 박스를 그려서 시각화
-        
+        탐지된 얼굴에 박스와 랜드마크를 그려서 시각화
+
         Args:
             image (np.ndarray): BGR 형식의 이미지
             save_path (str, optional): 저장할 경로
             force (bool): 강제 탐지 여부 (테스트용)
-            
+
         Returns:
-            np.ndarray: 얼굴 박스가 그려진 이미지
+            np.ndarray: 얼굴 박스와 랜드마크가 그려진 이미지
         """
         if force:
             faces = self.force_detection(image)
         else:
             faces = self.detect_faces(image)
-        
+
         result_image = image.copy()
-        
-        # 메모리 상태 정보 추가
+
+        # 상태 정보 표시
         status = self.get_memory_status()
-        status_text = f"OpenCV DNN: {'Loaded' if status['model_loaded'] else 'Unloaded'} | " \
-                     f"Active: {'Yes' if status['detection_active'] else 'No'} | " \
-                     f"Time: {'Yes' if status['is_detection_time'] else 'No'}"
-        
-        cv2.putText(result_image, status_text, (10, 30), 
+        status_text = f"YuNet: {'Loaded' if status['model_loaded'] else 'Unloaded'} | " \
+                     f"Active: {'Yes' if status['detection_active'] else 'No'}"
+
+        cv2.putText(result_image, status_text, (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
+
         for face in faces:
             x, y, w, h = face['box']
             confidence = face['confidence']
-            
-            # 얼굴 영역에 사각형 그리기
+
+            # 얼굴 박스 (초록색)
             cv2.rectangle(result_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            
-            # 신뢰도 텍스트 추가
+
+            # 신뢰도 텍스트
             text = f"Face: {confidence:.2f}"
-            cv2.putText(result_image, text, (x, y - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            
-            # 키포인트 그리기 (DNN 모델은 키포인트 미제공)
+            cv2.putText(result_image, text, (x, y - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # 랜드마크 그리기 (YuNet의 장점!)
             if 'keypoints' in face and face['keypoints']:
                 for point_name, (px, py) in face['keypoints'].items():
-                    cv2.circle(result_image, (px, py), 3, (255, 0, 0), -1)
-        
+                    # 눈: 파란색, 코: 빨간색, 입: 주황색
+                    if 'eye' in point_name:
+                        color = (255, 0, 0)  # 파란색
+                    elif 'nose' in point_name:
+                        color = (0, 0, 255)  # 빨간색
+                    else:  # mouth
+                        color = (0, 165, 255)  # 주황색
+                    cv2.circle(result_image, (px, py), 3, color, -1)
+
         if save_path:
             cv2.imwrite(save_path, result_image)
-            
+
         return result_image
 
 def calculate_image_sharpness(image: np.ndarray) -> float:
@@ -416,20 +414,15 @@ def calculate_image_sharpness(image: np.ndarray) -> float:
 
 # 테스트 코드
 if __name__ == "__main__":
-    # 로깅 설정
     logging.basicConfig(level=logging.INFO)
-    
-    # 메모리 효율적인 얼굴 탐지기 초기화
+
     detector = FaceDetector()
-    
-    print("OpenCV DNN 얼굴 탐지기 테스트")
+
+    print("YuNet 고정확도 얼굴 탐지기 테스트")
     print("=" * 50)
-    
-    # 현재 상태 확인
-    status = detector.get_memory_status()
-    print(f"초기 상태: {status}")
-    
-    # 웹캠으로 테스트 (선택사항)
+    print(f"초기 상태: {detector.get_memory_status()}")
+
+    # 웹캠 테스트
     try:
         cap = cv2.VideoCapture(0)
         if cap.isOpened():
@@ -437,37 +430,34 @@ if __name__ == "__main__":
             print("- 일반 모드: 35~50분에만 탐지 활성화")
             print("- 강제 모드: 'f' 키로 강제 탐지")
             print("- 종료: ESC 키")
-            
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
-                # 키 입력 확인
+
                 key = cv2.waitKey(1) & 0xFF
-                
+
                 if key == 27:  # ESC
                     break
                 elif key == ord('f'):  # 강제 탐지
                     result = detector.draw_faces(frame, force=True)
-                    print("강제 탐지 실행")
+                    print("강제 탐지 실행 (YuNet 고정확도)")
                 else:
                     result = detector.draw_faces(frame)
-                
-                # 상태 정보 표시
+
                 current_time = datetime.now().strftime("%H:%M:%S")
-                cv2.putText(result, f"Time: {current_time}", (10, 60), 
+                cv2.putText(result, f"Time: {current_time}", (10, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                
-                cv2.imshow("OpenCV DNN Face Detection", result)
-            
+
+                cv2.imshow("YuNet Face Detection (High Accuracy)", result)
+
             cap.release()
             cv2.destroyAllWindows()
         else:
             print("웹캠을 사용할 수 없습니다.")
     except Exception as e:
         print(f"웹캠 테스트 오류: {e}")
-    
-    # 리소스 정리
+
     detector.cleanup()
-    print("OpenCV DNN 얼굴 탐지 모듈 테스트 완료")
+    print("\nYuNet 얼굴 탐지 모듈 테스트 완료")
