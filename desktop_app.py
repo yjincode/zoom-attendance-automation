@@ -41,7 +41,7 @@ class CaptureThread(QThread):
     def __init__(self, monitor_number: int = 2):
         """
         캡쳐 스레드 초기화
-        
+
         Args:
             monitor_number (int): 모니터 번호
         """
@@ -50,19 +50,42 @@ class CaptureThread(QThread):
         self.running = False
         self.capture_interval = 5000  # 5초마다 캡쳐
         self.test_mode_active = False  # 테스트 모드 플래그
-        
-        # 모듈 초기화
-        self.screen_capturer = ScreenCapture(monitor_number)
-        self.zoom_detector = ZoomParticipantDetector()
-        self.visualizer = RealTimeVisualizer()
-        
+
         self.logger = logging.getLogger(__name__)
+
+        # 모듈 초기화 (에러 발생 시에도 스레드가 생성되도록)
+        try:
+            self.screen_capturer = ScreenCapture(monitor_number)
+            self.logger.info(f"화면 캡쳐 모듈 초기화 완료: 모니터 {monitor_number}")
+        except Exception as e:
+            self.logger.error(f"화면 캡쳐 모듈 초기화 실패: {e}", exc_info=True)
+            self.screen_capturer = None
+
+        try:
+            self.zoom_detector = ZoomParticipantDetector()
+            self.logger.info("Zoom 감지 모듈 초기화 완료")
+        except Exception as e:
+            self.logger.error(f"Zoom 감지 모듈 초기화 실패: {e}", exc_info=True)
+            self.zoom_detector = None
+
+        try:
+            self.visualizer = RealTimeVisualizer()
+            self.logger.info("시각화 모듈 초기화 완료")
+        except Exception as e:
+            self.logger.error(f"시각화 모듈 초기화 실패: {e}", exc_info=True)
+            self.visualizer = None
     
     def run(self):
         """
         스레드 실행
         """
         self.running = True
+
+        # 초기화 검증
+        if self.screen_capturer is None:
+            self.error_occurred.emit("화면 캡쳐 모듈이 초기화되지 않았습니다")
+            self.logger.error("screen_capturer가 None입니다")
+            return
 
         while self.running:
             try:
@@ -77,10 +100,19 @@ class CaptureThread(QThread):
 
                 if screenshot is not None and screenshot.size > 0:
                     try:
+                        # zoom_detector가 None이면 건너뛰기
+                        if self.zoom_detector is None or self.visualizer is None:
+                            # 원본 화면만 표시
+                            self.frame_ready.emit(screenshot)
+                            self.original_frame_ready.emit(screenshot)
+                            self.msleep(self.capture_interval)
+                            continue
+
                         # 테스트 모드일 때 강제 탐지 활성화
                         if self.test_mode_active:
                             # 강제로 얼굴 탐지 모델 로드
-                            self.zoom_detector.face_detector._load_model()
+                            if hasattr(self.zoom_detector, 'face_detector') and self.zoom_detector.face_detector:
+                                self.zoom_detector.face_detector._load_model()
 
                         # Zoom 참가자 분석
                         analysis_results, total_participants, face_detected = \
@@ -259,6 +291,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 현재 시간 표시
         time_group = QGroupBox("📅 현재 시간")
+        time_group.setMinimumWidth(250)
         time_layout = QVBoxLayout(time_group)
         
         self.current_time_label = QLabel("--:--:--")
@@ -275,6 +308,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 현재 교시 표시
         class_group = QGroupBox("🎓 현재 교시")
+        class_group.setMinimumWidth(250)
         class_layout = QVBoxLayout(class_group)
         
         self.current_class_label = QLabel("수업 시간 아님")
@@ -285,23 +319,38 @@ class ZoomAttendanceMainWindow(QMainWindow):
         layout.addWidget(class_group)
         
         # 감지 상태 표시
-        detection_group = QGroupBox("👥 감지 상태")
+        detection_group = QGroupBox("👥 얼굴 감지 상태")
+        detection_group.setMinimumWidth(250)
         detection_layout = QVBoxLayout(detection_group)
-        
+
         self.participant_count_label = QLabel("참여자: 0명")
         self.participant_count_label.setAlignment(Qt.AlignCenter)
         self.participant_count_label.setStyleSheet("font-size: 16px; color: #4CAF50;")
         detection_layout.addWidget(self.participant_count_label)
-        
+
         self.face_count_label = QLabel("얼굴 감지: 0명")
         self.face_count_label.setAlignment(Qt.AlignCenter)
         self.face_count_label.setStyleSheet("font-size: 16px; color: #2196F3;")
         detection_layout.addWidget(self.face_count_label)
-        
+
+        # 필요 인원수 설정 추가
+        face_threshold_layout = QHBoxLayout()
+        face_threshold_label = QLabel("필요 인원:")
+        face_threshold_label.setStyleSheet("font-size: 12px;")
+        self.main_face_threshold_spin = QSpinBox()
+        self.main_face_threshold_spin.setRange(1, 50)
+        self.main_face_threshold_spin.setValue(self.required_face_count)
+        self.main_face_threshold_spin.setToolTip("캡처에 필요한 최소 얼굴 감지 수")
+        self.main_face_threshold_spin.valueChanged.connect(self.on_main_face_threshold_changed)
+        face_threshold_layout.addWidget(face_threshold_label)
+        face_threshold_layout.addWidget(self.main_face_threshold_spin)
+        detection_layout.addLayout(face_threshold_layout)
+
         layout.addWidget(detection_group)
         
         # 모니터링 상태
         monitoring_group = QGroupBox("🔍 모니터링 상태")
+        monitoring_group.setMinimumWidth(250)
         monitoring_layout = QVBoxLayout(monitoring_group)
         
         self.monitoring_status_label = QLabel("❌ 중지됨")
@@ -313,6 +362,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 스케줄 진행상황 (상세 정보)
         schedule_group = QGroupBox("📋 스케줄 진행상황")
+        schedule_group.setMinimumWidth(250)
         schedule_layout = QVBoxLayout(schedule_group)
 
         # 현재 교시 진행상황
@@ -340,6 +390,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 제어 버튼 섹션
         control_group = QGroupBox("🎮 제어")
+        control_group.setMinimumWidth(250)
         control_layout = QVBoxLayout(control_group)
         
         # 모니터링 시작/중지 버튼
@@ -1448,10 +1499,27 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 else:
                     self.status_labels['period'].setText("교시: 쉬는시간")
     
+    def on_main_face_threshold_changed(self, value: int):
+        """
+        메인 화면에서 필요 인원수 변경
+
+        Args:
+            value (int): 새로운 필요 인원수
+        """
+        self.required_face_count = value
+        self.save_settings()
+        self.logger.info(f"필요 인원수 변경: {value}명")
+
+        # 설정 탭의 SpinBox도 동기화
+        if hasattr(self, 'face_threshold_spin'):
+            self.face_threshold_spin.blockSignals(True)
+            self.face_threshold_spin.setValue(value)
+            self.face_threshold_spin.blockSignals(False)
+
     def handle_error(self, error_message: str):
         """
         오류 처리
-        
+
         Args:
             error_message (str): 오류 메시지
         """

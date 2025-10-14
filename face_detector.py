@@ -53,10 +53,14 @@ class FaceDetector:
         # YuNet 입력 크기
         self.input_size = (320, 320)
 
-        # 초기화 시 모델 로드
-        self._load_model()
-
-        self.logger.info("YuNet 고정확도 얼굴 탐지기 초기화 완료")
+        # 초기화 시 모델 로드 (지연 로딩으로 변경)
+        # 첫 감지 시점에 로드하여 초기화 크래시 방지
+        try:
+            self._load_model()
+            self.logger.info("YuNet 고정확도 얼굴 탐지기 초기화 완료")
+        except Exception as e:
+            self.logger.warning(f"YuNet 모델 초기 로드 실패 (첫 감지 시 재시도): {e}")
+            self.is_model_loaded = False
     
     def _load_model(self):
         """
