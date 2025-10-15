@@ -323,22 +323,22 @@ class ZoomAttendanceMainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         
         # 현재 시간 표시
-        time_group = QGroupBox("📅 현재 시간")
-        time_group.setMinimumWidth(250)
-        time_layout = QVBoxLayout(time_group)
+        self.time_group = QGroupBox("📅 현재 시간")
+        self.time_group.setMinimumWidth(250)
+        time_layout = QVBoxLayout(self.time_group)
         time_layout.setContentsMargins(10, 20, 10, 15)  # 상하좌우 패딩
-        
+
         self.current_time_label = QLabel("--:--:--")
         self.current_time_label.setAlignment(Qt.AlignCenter)
         self.current_time_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #2196F3;")
         time_layout.addWidget(self.current_time_label)
-        
+
         self.current_date_label = QLabel("----년 --월 --일")
         self.current_date_label.setAlignment(Qt.AlignCenter)
         self.current_date_label.setStyleSheet("font-size: 14px; color: #666;")
         time_layout.addWidget(self.current_date_label)
-        
-        layout.addWidget(time_group)
+
+        layout.addWidget(self.time_group)
         
         # 현재 교시 표시
         class_group = QGroupBox("🎓 현재 교시")
@@ -479,7 +479,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         # 폴더 바로가기 버튼
         folder_btn = QPushButton("📁 저장 폴더 열기")
         folder_btn.clicked.connect(self.open_save_folder)
-        folder_btn.setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-size: 12px; padding: 8px; }")
+        folder_btn.setStyleSheet("QPushButton { background-color: #757575; color: white; font-size: 11px; padding: 6px; }")
         control_layout.addWidget(folder_btn)
 
         # 설명 레이블
@@ -756,10 +756,10 @@ class ZoomAttendanceMainWindow(QMainWindow):
         스케줄 진행상황 업데이트 (상세 정보 표시)
         """
         try:
-            if not hasattr(self, 'scheduler') or not self.scheduler:
-                # 스케줄러가 없으면 대기 상태
+            # 모니터링이 꺼져있으면 대기 상태 표시
+            if not self.is_monitoring:
                 if hasattr(self, 'schedule_current_label'):
-                    self.schedule_current_label.setText("자동 스케줄 대기 중")
+                    self.schedule_current_label.setText("모니터링 대기 중")
                 if hasattr(self, 'schedule_attempt_label'):
                     self.schedule_attempt_label.setText("")
                 if hasattr(self, 'schedule_next_label'):
@@ -769,7 +769,13 @@ class ZoomAttendanceMainWindow(QMainWindow):
             from scheduler import ClassScheduler
             now = datetime.now()
             current_time = now.time()
-            class_schedule = self.scheduler.class_schedule
+
+            # 스케줄러가 있으면 사용, 없으면 임시 생성
+            if hasattr(self, 'scheduler') and self.scheduler:
+                class_schedule = self.scheduler.class_schedule
+            else:
+                temp_scheduler = ClassScheduler(capture_callback=None)
+                class_schedule = temp_scheduler.class_schedule
 
             # 각 교시의 캡처 시간 확인 (설정된 시작 분부터)
             for period, (start_time, end_time) in enumerate(class_schedule, 1):
@@ -883,6 +889,45 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.logger.error(f"스케줄 진행상황 업데이트 오류: {e}")
             if hasattr(self, 'schedule_current_label'):
                 self.schedule_current_label.setText("진행상황 확인 오류")
+
+    def _is_in_capture_window(self) -> bool:
+        """
+        현재 시간이 스케줄 감지 시간 내인지 확인
+
+        Returns:
+            bool: 감지 시간이면 True, 아니면 False
+        """
+        try:
+            from scheduler import ClassScheduler
+            from datetime import time
+
+            # 임시 스케줄러로 교시 확인
+            temp_scheduler = ClassScheduler(capture_callback=None)
+            now = datetime.now()
+            current_time = now.time()
+            class_schedule = temp_scheduler.class_schedule
+
+            # 각 교시의 캡처 시간 확인
+            for period, (start_time, end_time) in enumerate(class_schedule, 1):
+                # 설정된 시작 분 사용
+                capture_start_hour = start_time.hour
+                capture_start_minute = start_time.minute + self.capture_start_minute
+                if capture_start_minute >= 60:
+                    capture_start_hour += 1
+                    capture_start_minute -= 60
+
+                capture_start = time(capture_start_hour, capture_start_minute)
+                capture_end = end_time
+
+                # 현재 캡처 시간 중인 경우
+                if capture_start <= current_time <= capture_end:
+                    return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"캡처 시간 확인 오류: {e}")
+            return False
 
     def update_preview_countdown(self):
         """
@@ -1434,8 +1479,12 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 self.logger.info("스레드 시작 완료")
 
                 self.is_monitoring = True
-                self.monitor_btn.setText("모니터링 중...")
-                self.monitor_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 14px; padding: 10px; font-weight: bold; }")
+                self.monitor_btn.setText("모니터링 중지")
+                self.monitor_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; font-size: 14px; padding: 10px; font-weight: bold; }")
+
+                # 최상단 박스 형광초록색으로 강조
+                if hasattr(self, 'time_group'):
+                    self.time_group.setStyleSheet("QGroupBox { border: 3px solid #76FF03; font-weight: bold; }")
 
                 # 상태 업데이트 타이머
                 self.status_timer = QTimer()
@@ -1461,7 +1510,16 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.is_monitoring = False
             self.monitor_btn.setText("모니터링 시작")
             self.monitor_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; font-weight: bold; }")
-            
+
+            # 최상단 박스 스타일 원래대로
+            if hasattr(self, 'time_group'):
+                self.time_group.setStyleSheet("")
+
+            # 미리보기 초기화
+            if hasattr(self, 'preview_label') and self.preview_label:
+                self.preview_label.setText("모니터링을 시작하세요")
+                self.preview_label.setPixmap(QPixmap())
+
             if hasattr(self, 'screen_label') and self.screen_label:
                 self.screen_label.setText("모니터링을 시작하세요")
             if hasattr(self, 'face_indicator') and self.face_indicator:
@@ -1696,19 +1754,25 @@ class ZoomAttendanceMainWindow(QMainWindow):
     def update_screen(self, frame: np.ndarray):
         """
         화면 업데이트 - 메인 탭의 실시간 미리보기에 표시
-        
+        스케줄 감지 시간에만 미리보기 표시
+
         Args:
             frame (np.ndarray): 캡쳐된 프레임
         """
         try:
+            # 스케줄 감지 시간인지 확인
+            if not self._is_in_capture_window():
+                # 감지 시간이 아니면 미리보기 업데이트하지 않음 (카운트다운 유지)
+                return
+
             # OpenCV BGR을 RGB로 변환
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
+
             # QImage로 변환
             h, w, ch = rgb_frame.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            
+
             # 메인 탭의 미리보기 라벨 크기에 맞게 조정
             if hasattr(self, 'preview_label') and self.preview_label:
                 label_size = self.preview_label.size()
@@ -1717,7 +1781,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 )
                 self.preview_label.setPixmap(scaled_pixmap)
                 self._preview_default_set = False
-            
+
             # 기존 screen_label도 업데이트 (호환성)
             if hasattr(self, 'screen_label') and self.screen_label:
                 label_size = self.screen_label.size()
@@ -1725,7 +1789,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
                     label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
                 self.screen_label.setPixmap(scaled_pixmap)
-            
+
         except Exception as e:
             self.logger.error(f"화면 업데이트 오류: {e}")
     
