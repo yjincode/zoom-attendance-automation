@@ -391,20 +391,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         detection_layout.addLayout(absence_layout)
 
         layout.addWidget(detection_group)
-        
-        # 모니터링 상태
-        monitoring_group = QGroupBox("🔍 모니터링 상태")
-        monitoring_group.setMinimumWidth(250)
-        monitoring_layout = QVBoxLayout(monitoring_group)
-        monitoring_layout.setContentsMargins(10, 20, 10, 15)
-        
-        self.monitoring_status_label = QLabel("❌ 중지됨")
-        self.monitoring_status_label.setAlignment(Qt.AlignCenter)
-        self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #F44336;")
-        monitoring_layout.addWidget(self.monitoring_status_label)
-        
-        layout.addWidget(monitoring_group)
-        
+
         # 스케줄 진행상황 (상세 정보)
         schedule_group = QGroupBox("📋 스케줄 진행상황")
         schedule_group.setMinimumWidth(250)
@@ -439,25 +426,25 @@ class ZoomAttendanceMainWindow(QMainWindow):
         control_group.setMinimumWidth(250)
         control_layout = QVBoxLayout(control_group)
         control_layout.setContentsMargins(10, 20, 10, 15)
-        
-        # 모니터링 시작/중지 버튼
+
+        # 모니터링 시작 버튼 (스케줄러 통합)
         self.monitor_btn = QPushButton("모니터링 시작")
         self.monitor_btn.clicked.connect(self.toggle_monitoring)
-        self.monitor_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
+        self.monitor_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; font-weight: bold; }")
         control_layout.addWidget(self.monitor_btn)
-        
-        # 스케줄러 시작/중지 버튼
-        self.scheduler_btn = QPushButton("자동 스케줄 시작")
-        self.scheduler_btn.clicked.connect(self.toggle_scheduler)
-        self.scheduler_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 14px; padding: 10px; }")
-        control_layout.addWidget(self.scheduler_btn)
-        
-        # 테스트 캡쳐 버튼
-        test_btn = QPushButton("테스트 캡쳐")
-        test_btn.clicked.connect(self.test_capture)
-        test_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 12px; padding: 8px; }")
-        control_layout.addWidget(test_btn)
-        
+
+        # 테스트 캡쳐 버튼 (30초간 3장 고정)
+        self.test_btn = QPushButton("테스트 캡쳐")
+        self.test_btn.clicked.connect(self.test_capture)
+        self.test_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 12px; padding: 8px; }")
+        control_layout.addWidget(self.test_btn)
+
+        # 설명 레이블
+        desc_label = QLabel("💡 모니터링 시작: 스케줄에 따라 자동 캡쳐\n💡 테스트 캡쳐: 30초간 3장 촬영")
+        desc_label.setStyleSheet("QLabel { color: #666; font-size: 10px; }")
+        desc_label.setWordWrap(True)
+        control_layout.addWidget(desc_label)
+
         layout.addWidget(control_group)
         
         layout.addStretch()
@@ -471,19 +458,25 @@ class ZoomAttendanceMainWindow(QMainWindow):
         panel = QFrame()
         panel.setFrameStyle(QFrame.StyledPanel)
         layout = QVBoxLayout(panel)
-        
+
         # 미리보기 화면
         preview_group = QGroupBox("📺 실시간 미리보기")
         preview_layout = QVBoxLayout(preview_group)
-        
+
         self.preview_label = QLabel("모니터링을 시작하세요")
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumSize(640, 360)
-        self.preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #f5f5f5; color: #666;")
+        self.preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #f5f5f5; color: #666; font-size: 16px;")
         preview_layout.addWidget(self.preview_label)
-        
+
+        # 캡쳐 진행상황 표시
+        self.capture_progress_label = QLabel("")
+        self.capture_progress_label.setAlignment(Qt.AlignCenter)
+        self.capture_progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #4CAF50; padding: 10px;")
+        preview_layout.addWidget(self.capture_progress_label)
+
         layout.addWidget(preview_group)
-        
+
         return panel
     
     def create_settings_tab(self):
@@ -720,18 +713,10 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 else:
                     self.current_class_label.setText("수업 시간 아님")
                     self.current_class_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #FF5722;")
-            
-            # 모니터링 상태 업데이트 (안전 확인)
-            if hasattr(self, 'monitoring_status_label') and self.monitoring_status_label:
-                if hasattr(self, 'capture_thread') and self.capture_thread and self.capture_thread.running:
-                    self.monitoring_status_label.setText("✅ 모니터링 중")
-                    self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #4CAF50;")
-                else:
-                    self.monitoring_status_label.setText("❌ 중지됨")
-                    self.monitoring_status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #F44336;")
-            
-            # 스케줄 진행상황 업데이트
+
+            # 스케줄 진행상황 및 미리보기 카운트다운 업데이트
             self.update_schedule_progress()
+            self.update_preview_countdown()
 
         except Exception as e:
             self.logger.error(f"실시간 상태 업데이트 오류: {e}")
@@ -868,6 +853,73 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.logger.error(f"스케줄 진행상황 업데이트 오류: {e}")
             if hasattr(self, 'schedule_current_label'):
                 self.schedule_current_label.setText("진행상황 확인 오류")
+
+    def update_preview_countdown(self):
+        """
+        미리보기 화면에 카운트다운 또는 캡쳐 진행상황 표시
+        """
+        try:
+            if not hasattr(self, 'capture_progress_label'):
+                return
+
+            # 모니터링이 꺼져있으면 표시하지 않음
+            if not self.is_monitoring:
+                self.capture_progress_label.setText("")
+                return
+
+            from scheduler import ClassScheduler
+            from datetime import time
+
+            # 임시 스케줄러로 교시 확인
+            temp_scheduler = ClassScheduler(capture_callback=None)
+            now = datetime.now()
+            current_time = now.time()
+            class_schedule = temp_scheduler.class_schedule
+
+            # 각 교시의 캡처 시간 확인
+            for period, (start_time, end_time) in enumerate(class_schedule, 1):
+                # 설정된 시작 분 사용
+                capture_start_hour = start_time.hour
+                capture_start_minute = start_time.minute + self.capture_start_minute
+                if capture_start_minute >= 60:
+                    capture_start_hour += 1
+                    capture_start_minute -= 60
+
+                capture_start = time(capture_start_hour, capture_start_minute)
+                capture_end = end_time
+
+                # 현재 캡처 시간 중인 경우
+                if capture_start <= current_time <= capture_end:
+                    # 캡쳐 진행상황 표시
+                    current_count = self.period_capture_counts.get(period, 0)
+                    target_count = self.target_photo_count
+
+                    if current_count >= target_count:
+                        self.capture_progress_label.setText(f"✅ {period}교시 완료 ({current_count}/{target_count}장)")
+                        self.capture_progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #4CAF50; padding: 10px;")
+                    else:
+                        self.capture_progress_label.setText(f"📸 캡쳐 진행 중: {current_count}/{target_count}장")
+                        self.capture_progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #2196F3; padding: 10px;")
+                    return
+
+                # 다가오는 캡처 시간인 경우 (카운트다운)
+                if current_time < capture_start:
+                    total_seconds = (capture_start_hour * 3600 + capture_start_minute * 60) - \
+                                  (current_time.hour * 3600 + current_time.minute * 60 + current_time.second)
+
+                    minutes = total_seconds // 60
+                    seconds = total_seconds % 60
+
+                    self.capture_progress_label.setText(f"⏰ 다음 감지까지 {minutes:02d}분 {seconds:02d}초 남음")
+                    self.capture_progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #FF9800; padding: 10px;")
+                    return
+
+            # 모든 스케줄 종료
+            self.capture_progress_label.setText("📅 오늘 스케줄 종료")
+            self.capture_progress_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #999; padding: 10px;")
+
+        except Exception as e:
+            self.logger.error(f"미리보기 카운트다운 업데이트 오류: {e}")
 
     def update_next_capture_time(self):
         """
@@ -1352,8 +1404,8 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 self.logger.info("스레드 시작 완료")
 
                 self.is_monitoring = True
-                self.monitor_btn.setText("모니터링 중지")
-                self.monitor_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; font-size: 14px; padding: 10px; }")
+                self.monitor_btn.setText("모니터링 중...")
+                self.monitor_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 14px; padding: 10px; font-weight: bold; }")
 
                 # 상태 업데이트 타이머
                 self.status_timer = QTimer()
@@ -1378,7 +1430,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
             
             self.is_monitoring = False
             self.monitor_btn.setText("모니터링 시작")
-            self.monitor_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; }")
+            self.monitor_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-size: 14px; padding: 10px; font-weight: bold; }")
             
             if hasattr(self, 'screen_label') and self.screen_label:
                 self.screen_label.setText("모니터링을 시작하세요")
@@ -1515,34 +1567,98 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def test_capture(self):
         """
-        테스트 캡쳐 실행 (원본 프레임 사용)
+        테스트 캡쳐 실행: 30초간 3장 촬영
+        실시간 감지 중이면 차단
         """
         try:
-            if self.current_original_frame is not None:
-                # 현재 저장된 원본 프레임 사용
-                test_file = f"test_capture_{datetime.now().strftime('%H%M%S')}.png"
-                cv2.imwrite(test_file, self.current_original_frame)
-                
-                self.logger.info(f"테스트 캡쳐 완료: {test_file} (원본 화면)")
-                QMessageBox.information(self, "테스트 완료", f"테스트 캡쳐가 완료되었습니다.\n파일: {test_file}\n(시각화 효과 제외한 원본 화면)")
-            else:
-                # 모니터링이 실행되지 않은 경우 직접 캡쳐
+            # 실시간 감지 시간 체크
+            from scheduler import ClassScheduler
+            from datetime import time
+
+            temp_scheduler = ClassScheduler(capture_callback=None)
+            now = datetime.now()
+            current_time = now.time()
+            class_schedule = temp_scheduler.class_schedule
+
+            # 현재 캡처 시간인지 확인
+            for period, (start_time, end_time) in enumerate(class_schedule, 1):
+                capture_start_hour = start_time.hour
+                capture_start_minute = start_time.minute + self.capture_start_minute
+                if capture_start_minute >= 60:
+                    capture_start_hour += 1
+                    capture_start_minute -= 60
+
+                capture_start = time(capture_start_hour, capture_start_minute)
+                capture_end = end_time
+
+                if capture_start <= current_time <= capture_end:
+                    QMessageBox.warning(
+                        self, "테스트 불가",
+                        f"실시간 감지 시간에는 테스트 캡쳐를 사용할 수 없습니다.\n현재: {period}교시 캡쳐 중"
+                    )
+                    return
+
+            # 테스트 캡쳐 시작
+            self.logger.info("테스트 캡쳐 시작: 30초간 3장 촬영")
+            self.test_btn.setEnabled(False)
+            self.test_btn.setText("테스트 중...")
+
+            # 캡쳐 스레드 시작 (없으면)
+            if not self.is_monitoring:
                 selected_monitor = self.monitor_combo.currentData() or 2
-                capturer = ScreenCapture(selected_monitor)
-                
-                screenshot = capturer.capture_screen()
-                if screenshot.size > 0:
-                    test_file = f"test_capture_{datetime.now().strftime('%H%M%S')}.png"
-                    cv2.imwrite(test_file, screenshot)
-                    
-                    self.logger.info(f"테스트 캡쳐 완료: {test_file}")
-                    QMessageBox.information(self, "테스트 완료", f"테스트 캡쳐가 완료되었습니다.\n파일: {test_file}")
-                else:
-                    self.logger.error("테스트 캡쳐 실패")
-                    QMessageBox.warning(self, "테스트 실패", "화면 캡쳐에 실패했습니다.")
-                
+                self.capture_thread = CaptureThread(selected_monitor)
+                self.capture_thread.frame_ready.connect(self.update_screen)
+                self.capture_thread.original_frame_ready.connect(self.store_original_frame)
+                self.capture_thread.analysis_ready.connect(self.update_analysis)
+                self.capture_thread.start()
+
+            # 30초간 3장 촬영 (10초 간격)
+            import threading
+
+            def test_capture_worker():
+                captured_files = []
+                for i in range(3):
+                    # 대기
+                    time.sleep(10 if i > 0 else 0)
+
+                    # 캡쳐
+                    if self.current_original_frame is not None:
+                        date_str = datetime.now().strftime("%Y%m%d")
+                        test_file = f"captures/test_{date_str}_{i+1}.png"
+
+                        os.makedirs("captures", exist_ok=True)
+                        cv2.imwrite(test_file, self.current_original_frame)
+                        captured_files.append(test_file)
+
+                        self.logger.info(f"테스트 캡쳐 {i+1}/3: {test_file}")
+
+                        # UI 업데이트 (스레드 안전)
+                        self.capture_progress_label.setText(f"📸 테스트 캡쳐: {i+1}/3장")
+
+                # 완료 후 UI 복구
+                self.test_btn.setEnabled(True)
+                self.test_btn.setText("테스트 캡쳐")
+                self.capture_progress_label.setText("")
+
+                # 모니터링이 원래 꺼져있었으면 종료
+                if not self.is_monitoring and self.capture_thread:
+                    self.capture_thread.stop()
+                    self.capture_thread = None
+
+                self.logger.info(f"테스트 캡쳐 완료: {len(captured_files)}장")
+                QMessageBox.information(
+                    self, "테스트 완료",
+                    f"테스트 캡쳐 완료\n{len(captured_files)}장 저장\n\n" + "\n".join(captured_files)
+                )
+
+            # 별도 스레드에서 실행
+            test_thread = threading.Thread(target=test_capture_worker, daemon=True)
+            test_thread.start()
+
         except Exception as e:
-            self.logger.error(f"테스트 캡쳐 오류: {e}")
+            self.logger.error(f"테스트 캡쳐 오류: {e}", exc_info=True)
+            self.test_btn.setEnabled(True)
+            self.test_btn.setText("테스트 캡쳐")
             QMessageBox.critical(self, "오류", f"테스트 중 오류가 발생했습니다:\n{e}")
     
     def update_screen(self, frame: np.ndarray):
