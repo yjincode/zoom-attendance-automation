@@ -835,13 +835,14 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def save_all_settings(self):
         """
-        모든 설정 저장 (교시 설정 + 기본 설정)
+        모든 설정 저장 (교시 설정 + 기본 설정) - 버튼 클릭 시
         """
         try:
-            # 기본 설정 저장
-            self.save_settings()
+            # 기본 설정 저장 (메시지 표시 O)
+            self.save_settings(show_message=False)
             # 교시 설정 저장
             self.save_schedule_settings()
+            # 통합 메시지
             QMessageBox.information(self, "저장 완료", "모든 설정이 저장되었습니다.")
         except Exception as e:
             self.logger.error(f"설정 저장 오류: {e}")
@@ -1506,15 +1507,24 @@ class ZoomAttendanceMainWindow(QMainWindow):
         Args:
             value (int): 새로운 필요 인원수
         """
-        self.required_face_count = value
-        self.save_settings()
-        self.logger.info(f"필요 인원수 변경: {value}명")
+        try:
+            # 값이 실제로 변경되었는지 확인
+            if self.required_face_count == value:
+                return
 
-        # 설정 탭의 SpinBox도 동기화
-        if hasattr(self, 'face_threshold_spin'):
-            self.face_threshold_spin.blockSignals(True)
-            self.face_threshold_spin.setValue(value)
-            self.face_threshold_spin.blockSignals(False)
+            self.required_face_count = value
+            self.logger.info(f"필요 인원수 변경: {value}명")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+            # 설정 탭의 SpinBox도 동기화
+            if hasattr(self, 'face_threshold_spin'):
+                self.face_threshold_spin.blockSignals(True)
+                self.face_threshold_spin.setValue(value)
+                self.face_threshold_spin.blockSignals(False)
+        except Exception as e:
+            self.logger.error(f"인원수 변경 처리 오류: {e}", exc_info=True)
 
     def handle_error(self, error_message: str):
         """
@@ -1646,25 +1656,34 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         self.logger.info("수동 탐지 완료")
     
-    def save_settings(self):
+    def save_settings(self, show_message=False):
         """
         설정 저장
+
+        Args:
+            show_message (bool): 저장 완료 메시지 표시 여부
         """
-        # 현재 UI 값들을 변수에 저장
-        self.required_face_count = self.face_count_spinbox.value()
-        self.manual_duration = self.duration_spinbox.value()
-        
-        # QSettings에 저장
-        self.settings.setValue('required_face_count', self.required_face_count)
-        self.settings.setValue('manual_duration', self.manual_duration)
-        
-        self.logger.info(f"설정 저장됨: 최소 얼굴 수={self.required_face_count}, 수동 시간={self.manual_duration}초")
-        
-        # 사용자에게 알림
-        QMessageBox.information(self, "설정 저장", 
-                               f"설정이 저장되었습니다.\n\n"
-                               f"• 최소 얼굴 수: {self.required_face_count}명\n"
-                               f"• 수동 탐지 시간: {self.manual_duration}초")
+        try:
+            # 현재 UI 값들을 변수에 저장 (안전하게)
+            if hasattr(self, 'face_count_spinbox') and self.face_count_spinbox:
+                self.required_face_count = self.face_count_spinbox.value()
+            if hasattr(self, 'duration_spinbox') and self.duration_spinbox:
+                self.manual_duration = self.duration_spinbox.value()
+
+            # QSettings에 저장
+            self.settings.setValue('required_face_count', self.required_face_count)
+            self.settings.setValue('manual_duration', self.manual_duration)
+
+            self.logger.debug(f"설정 저장: 얼굴={self.required_face_count}, 시간={self.manual_duration}초")
+
+            # 사용자에게 알림 (명시적으로 요청한 경우만)
+            if show_message:
+                QMessageBox.information(self, "설정 저장",
+                                       f"설정이 저장되었습니다.\n\n"
+                                       f"• 최소 얼굴 수: {self.required_face_count}명\n"
+                                       f"• 수동 탐지 시간: {self.manual_duration}초")
+        except Exception as e:
+            self.logger.error(f"설정 저장 오류: {e}", exc_info=True)
     
     def save_schedule_settings(self):
         """
