@@ -236,7 +236,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         
         # 기본 설정값
         self.required_face_count = 1  # 필요한 학생 수 (교사 제외)
-        self.absence_tolerance = 0    # 결석 허용 인원 (0=전원출석, 1=1명결석허용, ...)
+        self.absence_tolerance = 0    # 오차범위 (감지 허용 오차 인원)
         self.manual_duration = 30     # 수동 탐지 지속 시간 (초)
         self.class_schedules = {      # 교시별 활성화 설정
             1: True, 2: True, 3: True, 4: True,
@@ -377,18 +377,34 @@ class ZoomAttendanceMainWindow(QMainWindow):
         face_threshold_layout.addWidget(self.main_face_threshold_spin)
         detection_layout.addLayout(face_threshold_layout)
 
-        # 결석 허용 인원 설정 추가
-        absence_layout = QHBoxLayout()
-        absence_label = QLabel("결석 허용:")
-        absence_label.setStyleSheet("font-size: 12px;")
-        self.main_absence_spin = QSpinBox()
-        self.main_absence_spin.setRange(0, 49)
-        self.main_absence_spin.setValue(self.absence_tolerance)
-        self.main_absence_spin.setToolTip("결석 허용 인원 (0=전원출석 필수)")
-        self.main_absence_spin.valueChanged.connect(self.on_main_absence_changed)
-        absence_layout.addWidget(absence_label)
-        absence_layout.addWidget(self.main_absence_spin)
-        detection_layout.addLayout(absence_layout)
+        # 오차범위 설정 추가 (- 숫자 + 형태)
+        tolerance_layout = QHBoxLayout()
+        tolerance_label = QLabel("오차범위:")
+        tolerance_label.setStyleSheet("font-size: 12px;")
+
+        # - 버튼
+        self.tolerance_minus_btn = QPushButton("-")
+        self.tolerance_minus_btn.setFixedSize(30, 25)
+        self.tolerance_minus_btn.setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; }")
+        self.tolerance_minus_btn.clicked.connect(self.decrease_tolerance)
+
+        # 숫자 표시
+        self.tolerance_value_label = QLabel(str(self.absence_tolerance))
+        self.tolerance_value_label.setAlignment(Qt.AlignCenter)
+        self.tolerance_value_label.setFixedWidth(40)
+        self.tolerance_value_label.setStyleSheet("font-size: 14px; font-weight: bold; border: 1px solid #ccc; padding: 3px;")
+
+        # + 버튼
+        self.tolerance_plus_btn = QPushButton("+")
+        self.tolerance_plus_btn.setFixedSize(30, 25)
+        self.tolerance_plus_btn.setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; }")
+        self.tolerance_plus_btn.clicked.connect(self.increase_tolerance)
+
+        tolerance_layout.addWidget(tolerance_label)
+        tolerance_layout.addWidget(self.tolerance_minus_btn)
+        tolerance_layout.addWidget(self.tolerance_value_label)
+        tolerance_layout.addWidget(self.tolerance_plus_btn)
+        detection_layout.addLayout(tolerance_layout)
 
         layout.addWidget(detection_group)
 
@@ -505,20 +521,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         monitor_layout.addWidget(change_monitor_btn)
         
         layout.addWidget(monitor_group)
-        
-        # 탐지 조건 설정 그룹
-        detection_group = QGroupBox("👥 탐지 조건")
-        detection_layout = QGridLayout(detection_group)
-        
-        detection_layout.addWidget(QLabel("수업 참여자 수 (강사포함):"), 0, 0)
-        self.face_count_spinbox = QSpinBox()
-        self.face_count_spinbox.setRange(1, 50)
-        self.face_count_spinbox.setValue(self.required_face_count)
-        self.face_count_spinbox.setSuffix("명")
-        detection_layout.addWidget(self.face_count_spinbox, 0, 1)
-        
-        layout.addWidget(detection_group)
-        
+
         # 교시별 설정 그룹
         schedule_group = QGroupBox("📅 교시별 자동 촬영 설정")
         schedule_layout = QGridLayout(schedule_group)
@@ -1788,22 +1791,16 @@ class ZoomAttendanceMainWindow(QMainWindow):
             if hasattr(self, 'participant_count_label'):
                 self.participant_count_label.setText(f"예상 참여자: {value + 1}명 (교사포함)")
 
-            # 결석 허용 범위 검증
-            if self.absence_tolerance >= value:
+            # 오차범위 검증
+            if self.absence_tolerance > value:
                 QMessageBox.warning(
                     self, "설정 오류",
-                    f"결석 허용 인원({self.absence_tolerance}명)은 학생 수({value}명)보다 작아야 합니다.\n"
-                    f"결석 허용을 {value - 1}명으로 변경합니다."
+                    f"오차범위({self.absence_tolerance}명)는 학생 수({value}명)보다 많을 수 없습니다.\n"
+                    f"오차범위를 {value}명으로 변경합니다."
                 )
-                self.absence_tolerance = max(0, value - 1)
-                if hasattr(self, 'main_absence_spin'):
-                    self.main_absence_spin.blockSignals(True)
-                    self.main_absence_spin.setValue(self.absence_tolerance)
-                    self.main_absence_spin.blockSignals(False)
-
-            # 결석 허용 최대값 업데이트
-            if hasattr(self, 'main_absence_spin'):
-                self.main_absence_spin.setMaximum(value - 1)
+                self.absence_tolerance = value
+                if hasattr(self, 'tolerance_value_label'):
+                    self.tolerance_value_label.setText(str(self.absence_tolerance))
 
             # 설정 저장 (비동기)
             QTimer.singleShot(100, self.save_settings)
@@ -1816,39 +1813,50 @@ class ZoomAttendanceMainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"학생 수 변경 처리 오류: {e}", exc_info=True)
 
-    def on_main_absence_changed(self, value: int):
+    def increase_tolerance(self):
         """
-        메인 화면에서 결석 허용 인원 변경
-
-        Args:
-            value (int): 새로운 결석 허용 인원
+        오차범위 증가 (+버튼)
         """
         try:
-            # 값 검증
-            if value >= self.required_face_count:
+            new_value = self.absence_tolerance + 1
+
+            # 검증: 오차범위가 학생 수보다 많으면 안됨
+            if new_value > self.required_face_count:
                 QMessageBox.warning(
                     self, "설정 오류",
-                    f"결석 허용 인원({value}명)은 학생 수({self.required_face_count}명)보다 작아야 합니다."
+                    f"오차범위({new_value}명)는 학생 수({self.required_face_count}명)보다 많을 수 없습니다."
                 )
-                # 최대값으로 제한
-                value = max(0, self.required_face_count - 1)
-                self.main_absence_spin.blockSignals(True)
-                self.main_absence_spin.setValue(value)
-                self.main_absence_spin.blockSignals(False)
                 return
 
-            # 값이 실제로 변경되었는지 확인
-            if self.absence_tolerance == value:
-                return
-
-            self.absence_tolerance = value
-            self.logger.info(f"결석 허용 변경: {value}명 (최소 출석: {self.required_face_count - value}명)")
+            self.absence_tolerance = new_value
+            self.tolerance_value_label.setText(str(new_value))
+            self.logger.info(f"오차범위 변경: {new_value}명")
 
             # 설정 저장 (비동기)
             QTimer.singleShot(100, self.save_settings)
 
         except Exception as e:
-            self.logger.error(f"결석 허용 변경 처리 오류: {e}", exc_info=True)
+            self.logger.error(f"오차범위 증가 오류: {e}", exc_info=True)
+
+    def decrease_tolerance(self):
+        """
+        오차범위 감소 (-버튼)
+        """
+        try:
+            new_value = max(0, self.absence_tolerance - 1)
+
+            if new_value == self.absence_tolerance:
+                return
+
+            self.absence_tolerance = new_value
+            self.tolerance_value_label.setText(str(new_value))
+            self.logger.info(f"오차범위 변경: {new_value}명")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"오차범위 감소 오류: {e}", exc_info=True)
 
     def on_start_minute_changed(self, value: int):
         """
@@ -2129,7 +2137,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.settings.setValue('detection_duration_mode', self.detection_duration_mode)
             self.settings.setValue('target_photo_count', self.target_photo_count)
 
-            self.logger.debug(f"설정 저장: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}, 시간={self.manual_duration}초, "
+            self.logger.debug(f"설정 저장: 학생={self.required_face_count}, 오차범위={self.absence_tolerance}, 시간={self.manual_duration}초, "
                             f"시작분={self.capture_start_minute}, 재시도={self.retry_count}회/{self.retry_interval}분, "
                             f"감지시간={self.detection_duration_mode}초, 목표사진={self.target_photo_count}장")
 
@@ -2138,7 +2146,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 QMessageBox.information(self, "설정 저장",
                                        f"설정이 저장되었습니다.\n\n"
                                        f"• 학생 수: {self.required_face_count}명\n"
-                                       f"• 결석 허용: {self.absence_tolerance}명\n"
+                                       f"• 오차범위: {self.absence_tolerance}명\n"
                                        f"• 수동 탐지 시간: {self.manual_duration}초")
         except Exception as e:
             self.logger.error(f"설정 저장 오류: {e}", exc_info=True)
@@ -2195,17 +2203,17 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.detection_duration_mode = int(self.settings.value('detection_duration_mode', 60))
             self.target_photo_count = int(self.settings.value('target_photo_count', 5))
 
-            # 검증: 결석 허용이 학생 수보다 크면 안됨
-            if self.absence_tolerance >= self.required_face_count:
-                self.logger.warning(f"결석 허용({self.absence_tolerance})이 학생 수({self.required_face_count})보다 큼. 0으로 재설정.")
-                self.absence_tolerance = 0
+            # 검증: 오차범위가 학생 수보다 많으면 안됨
+            if self.absence_tolerance > self.required_face_count:
+                self.logger.warning(f"오차범위({self.absence_tolerance})가 학생 수({self.required_face_count})보다 많음. {self.required_face_count}로 재설정.")
+                self.absence_tolerance = self.required_face_count
 
             # 교시 설정 로드
             saved_schedules = self.settings.value('class_schedules', None)
             if saved_schedules:
                 self.class_schedules = json.loads(saved_schedules)
 
-            self.logger.info(f"설정 로드 완료: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}, "
+            self.logger.info(f"설정 로드 완료: 학생={self.required_face_count}, 오차범위={self.absence_tolerance}, "
                            f"시작분={self.capture_start_minute}, 재시도={self.retry_count}회/{self.retry_interval}분")
             
         except Exception as e:
