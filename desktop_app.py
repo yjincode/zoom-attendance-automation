@@ -228,7 +228,12 @@ class ZoomAttendanceMainWindow(QMainWindow):
         # 교시별 캡처 관리
         self.period_capture_counts = {}  # {period: count} 각 교시별 캡처된 사진 수
         self.max_captures_per_period = 5  # 교시당 최대 캡처 수
-        
+
+        # 저장 경로 설정 (바탕화면/강의출석자동화)
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        self.base_folder = os.path.join(desktop, "강의출석자동화")
+        os.makedirs(self.base_folder, exist_ok=True)
+
         # 테스트 및 설정 변수
         self.test_detection_active = False
         self.manual_detection_timer = None
@@ -364,18 +369,34 @@ class ZoomAttendanceMainWindow(QMainWindow):
         self.face_count_label.setStyleSheet("font-size: 16px; color: #2196F3;")
         detection_layout.addWidget(self.face_count_label)
 
-        # 필요 인원수 설정 추가
-        face_threshold_layout = QHBoxLayout()
-        face_threshold_label = QLabel("학생 수:")
-        face_threshold_label.setStyleSheet("font-size: 12px;")
-        self.main_face_threshold_spin = QSpinBox()
-        self.main_face_threshold_spin.setRange(1, 50)
-        self.main_face_threshold_spin.setValue(self.required_face_count)
-        self.main_face_threshold_spin.setToolTip("학생 수 (교사 제외)")
-        self.main_face_threshold_spin.valueChanged.connect(self.on_main_face_threshold_changed)
-        face_threshold_layout.addWidget(face_threshold_label)
-        face_threshold_layout.addWidget(self.main_face_threshold_spin)
-        detection_layout.addLayout(face_threshold_layout)
+        # 학생 수 설정 (- 숫자 + 형태)
+        student_layout = QHBoxLayout()
+        student_label = QLabel("학생 수:")
+        student_label.setStyleSheet("font-size: 12px;")
+
+        # - 버튼
+        self.student_minus_btn = QPushButton("-")
+        self.student_minus_btn.setFixedSize(30, 25)
+        self.student_minus_btn.setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; }")
+        self.student_minus_btn.clicked.connect(self.decrease_student_count)
+
+        # 숫자 표시
+        self.student_value_label = QLabel(str(self.required_face_count))
+        self.student_value_label.setAlignment(Qt.AlignCenter)
+        self.student_value_label.setFixedWidth(40)
+        self.student_value_label.setStyleSheet("font-size: 14px; font-weight: bold; border: 1px solid #ccc; padding: 3px;")
+
+        # + 버튼
+        self.student_plus_btn = QPushButton("+")
+        self.student_plus_btn.setFixedSize(30, 25)
+        self.student_plus_btn.setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; }")
+        self.student_plus_btn.clicked.connect(self.increase_student_count)
+
+        student_layout.addWidget(student_label)
+        student_layout.addWidget(self.student_minus_btn)
+        student_layout.addWidget(self.student_value_label)
+        student_layout.addWidget(self.student_plus_btn)
+        detection_layout.addLayout(student_layout)
 
         # 오차범위 설정 추가 (- 숫자 + 형태)
         tolerance_layout = QHBoxLayout()
@@ -454,6 +475,12 @@ class ZoomAttendanceMainWindow(QMainWindow):
         self.test_btn.clicked.connect(self.test_capture)
         self.test_btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-size: 12px; padding: 8px; }")
         control_layout.addWidget(self.test_btn)
+
+        # 폴더 바로가기 버튼
+        folder_btn = QPushButton("📁 저장 폴더 열기")
+        folder_btn.clicked.connect(self.open_save_folder)
+        folder_btn.setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-size: 12px; padding: 8px; }")
+        control_layout.addWidget(folder_btn)
 
         # 설명 레이블
         desc_label = QLabel("💡 모니터링 시작: 스케줄에 따라 자동 캡쳐\n💡 테스트 캡쳐: 30초간 3장 촬영")
@@ -1506,17 +1533,14 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.total_participants > 0 and
             self.face_detected_count == self.total_participants):
             
-            # 원본 화면을 captures 폴더에 저장
-            import os
-            os.makedirs("captures", exist_ok=True)
-            
+            # 원본 화면을 폴더 구조에 맞게 저장
             capture_count = self.period_capture_counts[period] + 1
-            capture_filename = f"captures/{datetime.now().strftime('%Y%m%d')}_{period}교시_{capture_count}.png"
+            capture_filename = self.get_capture_filepath(period, capture_count)
             cv2.imwrite(capture_filename, self.current_original_frame)
-            
+
             # 캡처 카운트 증가
             self.period_capture_counts[period] += 1
-            
+
             self.logger.info(f"출석 조건 만족 - 원본 화면 저장: {capture_filename} ({self.period_capture_counts[period]}/5)")
             self.attendance_logger.log_attendance(period, [capture_filename])
             self.notification_system.notify_capture_success(period, capture_filename)
@@ -1606,6 +1630,9 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.test_btn.setEnabled(False)
             self.test_btn.setText("테스트 중...")
 
+            # 모니터링이 꺼져있었는지 기록
+            was_monitoring_off = not self.is_monitoring
+
             # 캡쳐 스레드 시작 (없으면)
             if not self.is_monitoring:
                 selected_monitor = self.monitor_combo.currentData() or 2
@@ -1626,10 +1653,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
 
                     # 캡쳐
                     if self.current_original_frame is not None:
-                        date_str = datetime.now().strftime("%Y%m%d")
-                        test_file = f"captures/test_{date_str}_{i+1}.png"
-
-                        os.makedirs("captures", exist_ok=True)
+                        test_file = self.get_test_filepath(i+1)
                         cv2.imwrite(test_file, self.current_original_frame)
                         captured_files.append(test_file)
 
@@ -1644,9 +1668,14 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 self.capture_progress_label.setText("")
 
                 # 모니터링이 원래 꺼져있었으면 종료
-                if not self.is_monitoring and self.capture_thread:
+                if was_monitoring_off and self.capture_thread:
                     self.capture_thread.stop()
                     self.capture_thread = None
+
+                    # 미리보기 초기화
+                    if hasattr(self, 'preview_label'):
+                        self.preview_label.setText("모니터링을 시작하세요")
+                        self.preview_label.setPixmap(QPixmap())
 
                 self.logger.info(f"테스트 캡쳐 완료: {len(captured_files)}장")
                 QMessageBox.information(
@@ -1813,6 +1842,66 @@ class ZoomAttendanceMainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"학생 수 변경 처리 오류: {e}", exc_info=True)
 
+    def increase_student_count(self):
+        """
+        학생 수 증가 (+버튼)
+        """
+        try:
+            new_value = min(50, self.required_face_count + 1)
+
+            if new_value == self.required_face_count:
+                return
+
+            self.required_face_count = new_value
+            self.student_value_label.setText(str(new_value))
+            self.logger.info(f"학생 수 변경: {new_value}명")
+
+            # 참여자 수 라벨 업데이트
+            if hasattr(self, 'participant_count_label'):
+                self.participant_count_label.setText(f"예상 참여자: {new_value + 1}명 (교사포함)")
+
+            # 오차범위 검증
+            if self.absence_tolerance > new_value:
+                self.absence_tolerance = new_value
+                if hasattr(self, 'tolerance_value_label'):
+                    self.tolerance_value_label.setText(str(self.absence_tolerance))
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"학생 수 증가 오류: {e}", exc_info=True)
+
+    def decrease_student_count(self):
+        """
+        학생 수 감소 (-버튼)
+        """
+        try:
+            new_value = max(1, self.required_face_count - 1)
+
+            if new_value == self.required_face_count:
+                return
+
+            self.required_face_count = new_value
+            self.student_value_label.setText(str(new_value))
+            self.logger.info(f"학생 수 변경: {new_value}명")
+
+            # 참여자 수 라벨 업데이트
+            if hasattr(self, 'participant_count_label'):
+                self.participant_count_label.setText(f"예상 참여자: {new_value + 1}명 (교사포함)")
+
+            # 오차범위 검증
+            if self.absence_tolerance > new_value:
+                self.absence_tolerance = new_value
+                if hasattr(self, 'tolerance_value_label'):
+                    self.tolerance_value_label.setText(str(self.absence_tolerance))
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"학생 수 감소 오류: {e}", exc_info=True)
+
     def increase_tolerance(self):
         """
         오차범위 증가 (+버튼)
@@ -1857,6 +1946,70 @@ class ZoomAttendanceMainWindow(QMainWindow):
 
         except Exception as e:
             self.logger.error(f"오차범위 감소 오류: {e}", exc_info=True)
+
+    def open_save_folder(self):
+        """
+        저장 폴더 열기
+        """
+        try:
+            import subprocess
+            import platform
+
+            # 폴더가 없으면 생성
+            os.makedirs(self.base_folder, exist_ok=True)
+
+            # OS별로 폴더 열기
+            if platform.system() == 'Windows':
+                os.startfile(self.base_folder)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', self.base_folder])
+            else:  # Linux
+                subprocess.run(['xdg-open', self.base_folder])
+
+            self.logger.info(f"저장 폴더 열기: {self.base_folder}")
+
+        except Exception as e:
+            self.logger.error(f"폴더 열기 오류: {e}", exc_info=True)
+            QMessageBox.warning(self, "오류", f"폴더를 열 수 없습니다:\n{e}")
+
+    def get_capture_filepath(self, period: int, index: int) -> str:
+        """
+        캡쳐 파일 경로 생성
+        바탕화면/강의출석자동화/날짜/교시/파일명
+
+        Args:
+            period (int): 교시 번호
+            index (int): 파일 인덱스
+
+        Returns:
+            str: 파일 전체 경로
+        """
+        date_str = datetime.now().strftime("%y%m%d")
+        date_folder = os.path.join(self.base_folder, date_str)
+        period_folder = os.path.join(date_folder, f"{period}교시")
+
+        os.makedirs(period_folder, exist_ok=True)
+
+        filename = f"{date_str}_{period}교시({index}).png"
+        return os.path.join(period_folder, filename)
+
+    def get_test_filepath(self, index: int) -> str:
+        """
+        테스트 캡쳐 파일 경로 생성
+        바탕화면/강의출석자동화/테스트캡쳐/날짜_testN.png
+
+        Args:
+            index (int): 파일 인덱스
+
+        Returns:
+            str: 파일 전체 경로
+        """
+        test_folder = os.path.join(self.base_folder, "테스트캡쳐")
+        os.makedirs(test_folder, exist_ok=True)
+
+        date_str = datetime.now().strftime("%y%m%d")
+        filename = f"{date_str}_test{index}.png"
+        return os.path.join(test_folder, filename)
 
     def on_start_minute_changed(self, value: int):
         """
