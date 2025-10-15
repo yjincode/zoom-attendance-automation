@@ -49,7 +49,7 @@ class CaptureThread(QThread):
             super().__init__()
             self.monitor_number = monitor_number
             self.running = False
-            self.capture_interval = 5000  # 5초마다 캡쳐
+            self.capture_interval = 1000  # 1초마다 캡쳐
             self.test_mode_active = False  # 테스트 모드 플래그
 
             self.logger = logging.getLogger(__name__)
@@ -125,15 +125,13 @@ class CaptureThread(QThread):
                             self.msleep(self.capture_interval)
                             continue
 
-                        # 테스트 모드일 때 강제 탐지 활성화
-                        if self.test_mode_active:
-                            # 강제로 얼굴 탐지 모델 로드
-                            if hasattr(self.zoom_detector, 'face_detector') and self.zoom_detector.face_detector:
-                                self.zoom_detector.face_detector._load_model()
+                        # 항상 얼굴 탐지 활성화
+                        if hasattr(self.zoom_detector, 'face_detector') and self.zoom_detector.face_detector:
+                            self.zoom_detector.face_detector._load_model()
 
-                        # Zoom 참가자 분석
+                        # Zoom 참가자 분석 (항상 얼굴 감지 활성화)
                         analysis_results, total_participants, face_detected = \
-                            self.zoom_detector.detect_and_analyze_all(screenshot, force_detection=self.test_mode_active)
+                            self.zoom_detector.detect_and_analyze_all(screenshot, force_detection=True)
 
                         # 시각화 적용
                         visualized_frame = self.visualizer.draw_participant_boxes(
