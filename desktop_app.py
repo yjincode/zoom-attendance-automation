@@ -45,35 +45,52 @@ class CaptureThread(QThread):
         Args:
             monitor_number (int): 모니터 번호
         """
-        super().__init__()
-        self.monitor_number = monitor_number
-        self.running = False
-        self.capture_interval = 5000  # 5초마다 캡쳐
-        self.test_mode_active = False  # 테스트 모드 플래그
-
-        self.logger = logging.getLogger(__name__)
-
-        # 모듈 초기화 (에러 발생 시에도 스레드가 생성되도록)
         try:
-            self.screen_capturer = ScreenCapture(monitor_number)
-            self.logger.info(f"화면 캡쳐 모듈 초기화 완료: 모니터 {monitor_number}")
-        except Exception as e:
-            self.logger.error(f"화면 캡쳐 모듈 초기화 실패: {e}", exc_info=True)
+            super().__init__()
+            self.monitor_number = monitor_number
+            self.running = False
+            self.capture_interval = 5000  # 5초마다 캡쳐
+            self.test_mode_active = False  # 테스트 모드 플래그
+
+            self.logger = logging.getLogger(__name__)
+            self.logger.info(f"=== CaptureThread 초기화 시작: 모니터 {monitor_number} ===")
+
+            # 화면 캡쳐 모듈 초기화
             self.screen_capturer = None
+            try:
+                from screen_capture import ScreenCapture
+                self.screen_capturer = ScreenCapture(monitor_number)
+                self.logger.info(f"✓ 화면 캡쳐 모듈 초기화 완료")
+            except Exception as e:
+                self.logger.error(f"✗ 화면 캡쳐 모듈 초기화 실패: {e}", exc_info=True)
+                raise Exception(f"화면 캡쳐 초기화 실패: {e}")
 
-        try:
-            self.zoom_detector = ZoomParticipantDetector()
-            self.logger.info("Zoom 감지 모듈 초기화 완료")
-        except Exception as e:
-            self.logger.error(f"Zoom 감지 모듈 초기화 실패: {e}", exc_info=True)
+            # Zoom 감지 모듈 초기화
             self.zoom_detector = None
+            try:
+                from zoom_detector import ZoomParticipantDetector
+                self.zoom_detector = ZoomParticipantDetector()
+                self.logger.info("✓ Zoom 감지 모듈 초기화 완료")
+            except Exception as e:
+                self.logger.error(f"✗ Zoom 감지 모듈 초기화 실패: {e}", exc_info=True)
+                # Zoom 감지는 선택사항으로 처리
 
-        try:
-            self.visualizer = RealTimeVisualizer()
-            self.logger.info("시각화 모듈 초기화 완료")
-        except Exception as e:
-            self.logger.error(f"시각화 모듈 초기화 실패: {e}", exc_info=True)
+            # 시각화 모듈 초기화
             self.visualizer = None
+            try:
+                from visualizer import RealTimeVisualizer
+                self.visualizer = RealTimeVisualizer()
+                self.logger.info("✓ 시각화 모듈 초기화 완료")
+            except Exception as e:
+                self.logger.error(f"✗ 시각화 모듈 초기화 실패: {e}", exc_info=True)
+                # 시각화는 선택사항으로 처리
+
+            self.logger.info("=== CaptureThread 초기화 완료 ===")
+
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.critical(f"!!! CaptureThread 초기화 치명적 오류: {e}", exc_info=True)
+            raise
     
     def run(self):
         """
@@ -220,7 +237,8 @@ class ZoomAttendanceMainWindow(QMainWindow):
         self.settings = QSettings('ZoomAttendance', 'Settings')
         
         # 기본 설정값
-        self.required_face_count = 1  # 필요한 최소 얼굴 수
+        self.required_face_count = 1  # 필요한 학생 수 (교사 제외)
+        self.absence_tolerance = 0    # 결석 허용 인원 (0=전원출석, 1=1명결석허용, ...)
         self.manual_duration = 30     # 수동 탐지 지속 시간 (초)
         self.class_schedules = {      # 교시별 활성화 설정
             1: True, 2: True, 3: True, 4: True,
@@ -293,6 +311,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         time_group = QGroupBox("📅 현재 시간")
         time_group.setMinimumWidth(250)
         time_layout = QVBoxLayout(time_group)
+        time_layout.setContentsMargins(10, 20, 10, 15)  # 상하좌우 패딩
         
         self.current_time_label = QLabel("--:--:--")
         self.current_time_label.setAlignment(Qt.AlignCenter)
@@ -310,6 +329,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         class_group = QGroupBox("🎓 현재 교시")
         class_group.setMinimumWidth(250)
         class_layout = QVBoxLayout(class_group)
+        class_layout.setContentsMargins(10, 20, 10, 15)
         
         self.current_class_label = QLabel("수업 시간 아님")
         self.current_class_label.setAlignment(Qt.AlignCenter)
@@ -322,10 +342,11 @@ class ZoomAttendanceMainWindow(QMainWindow):
         detection_group = QGroupBox("👥 얼굴 감지 상태")
         detection_group.setMinimumWidth(250)
         detection_layout = QVBoxLayout(detection_group)
+        detection_layout.setContentsMargins(10, 20, 10, 15)
 
-        self.participant_count_label = QLabel("참여자: 0명")
+        self.participant_count_label = QLabel(f"예상 참여자: {self.required_face_count + 1}명 (교사포함)")
         self.participant_count_label.setAlignment(Qt.AlignCenter)
-        self.participant_count_label.setStyleSheet("font-size: 16px; color: #4CAF50;")
+        self.participant_count_label.setStyleSheet("font-size: 14px; color: #4CAF50;")
         detection_layout.addWidget(self.participant_count_label)
 
         self.face_count_label = QLabel("얼굴 감지: 0명")
@@ -335,16 +356,29 @@ class ZoomAttendanceMainWindow(QMainWindow):
 
         # 필요 인원수 설정 추가
         face_threshold_layout = QHBoxLayout()
-        face_threshold_label = QLabel("필요 인원:")
+        face_threshold_label = QLabel("학생 수:")
         face_threshold_label.setStyleSheet("font-size: 12px;")
         self.main_face_threshold_spin = QSpinBox()
         self.main_face_threshold_spin.setRange(1, 50)
         self.main_face_threshold_spin.setValue(self.required_face_count)
-        self.main_face_threshold_spin.setToolTip("캡처에 필요한 최소 얼굴 감지 수")
+        self.main_face_threshold_spin.setToolTip("학생 수 (교사 제외)")
         self.main_face_threshold_spin.valueChanged.connect(self.on_main_face_threshold_changed)
         face_threshold_layout.addWidget(face_threshold_label)
         face_threshold_layout.addWidget(self.main_face_threshold_spin)
         detection_layout.addLayout(face_threshold_layout)
+
+        # 결석 허용 인원 설정 추가
+        absence_layout = QHBoxLayout()
+        absence_label = QLabel("결석 허용:")
+        absence_label.setStyleSheet("font-size: 12px;")
+        self.main_absence_spin = QSpinBox()
+        self.main_absence_spin.setRange(0, 49)
+        self.main_absence_spin.setValue(self.absence_tolerance)
+        self.main_absence_spin.setToolTip("결석 허용 인원 (0=전원출석 필수)")
+        self.main_absence_spin.valueChanged.connect(self.on_main_absence_changed)
+        absence_layout.addWidget(absence_label)
+        absence_layout.addWidget(self.main_absence_spin)
+        detection_layout.addLayout(absence_layout)
 
         layout.addWidget(detection_group)
         
@@ -352,6 +386,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         monitoring_group = QGroupBox("🔍 모니터링 상태")
         monitoring_group.setMinimumWidth(250)
         monitoring_layout = QVBoxLayout(monitoring_group)
+        monitoring_layout.setContentsMargins(10, 20, 10, 15)
         
         self.monitoring_status_label = QLabel("❌ 중지됨")
         self.monitoring_status_label.setAlignment(Qt.AlignCenter)
@@ -364,6 +399,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         schedule_group = QGroupBox("📋 스케줄 진행상황")
         schedule_group.setMinimumWidth(250)
         schedule_layout = QVBoxLayout(schedule_group)
+        schedule_layout.setContentsMargins(10, 20, 10, 15)
 
         # 현재 교시 진행상황
         self.schedule_current_label = QLabel("대기 중...")
@@ -392,6 +428,7 @@ class ZoomAttendanceMainWindow(QMainWindow):
         control_group = QGroupBox("🎮 제어")
         control_group.setMinimumWidth(250)
         control_layout = QVBoxLayout(control_group)
+        control_layout.setContentsMargins(10, 20, 10, 15)
         
         # 모니터링 시작/중지 버튼
         self.monitor_btn = QPushButton("모니터링 시작")
@@ -1191,28 +1228,41 @@ class ZoomAttendanceMainWindow(QMainWindow):
         """
         모니터링 시작/중지
         """
-        if not self.is_monitoring:
-            # 모니터링 시작
-            selected_monitor = self.monitor_combo.currentData() or 2
-            
-            self.capture_thread = CaptureThread(selected_monitor)
-            self.capture_thread.frame_ready.connect(self.update_screen)
-            self.capture_thread.original_frame_ready.connect(self.store_original_frame)
-            self.capture_thread.analysis_ready.connect(self.update_analysis)
-            self.capture_thread.error_occurred.connect(self.handle_error)
-            
-            self.capture_thread.start()
-            
-            self.is_monitoring = True
-            self.monitor_btn.setText("모니터링 중지")
-            self.monitor_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; font-size: 14px; padding: 10px; }")
-            
-            # 상태 업데이트 타이머
-            self.status_timer = QTimer()
-            self.status_timer.timeout.connect(self.update_status)
-            self.status_timer.start(1000)  # 1초마다
-            
-            self.logger.info("실시간 모니터링 시작")
+        try:
+            if not self.is_monitoring:
+                # 모니터링 시작
+                self.logger.info("모니터링 시작 시도...")
+
+                selected_monitor = self.monitor_combo.currentData() or 2
+                self.logger.info(f"선택된 모니터: {selected_monitor}")
+
+                self.capture_thread = CaptureThread(selected_monitor)
+                self.logger.info("CaptureThread 생성 완료")
+
+                self.capture_thread.frame_ready.connect(self.update_screen)
+                self.capture_thread.original_frame_ready.connect(self.store_original_frame)
+                self.capture_thread.analysis_ready.connect(self.update_analysis)
+                self.capture_thread.error_occurred.connect(self.handle_error)
+                self.logger.info("시그널 연결 완료")
+
+                self.capture_thread.start()
+                self.logger.info("스레드 시작 완료")
+
+                self.is_monitoring = True
+                self.monitor_btn.setText("모니터링 중지")
+                self.monitor_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; font-size: 14px; padding: 10px; }")
+
+                # 상태 업데이트 타이머
+                self.status_timer = QTimer()
+                self.status_timer.timeout.connect(self.update_status)
+                self.status_timer.start(1000)  # 1초마다
+
+                self.logger.info("실시간 모니터링 시작 성공")
+
+        except Exception as e:
+            self.logger.error(f"모니터링 시작 실패: {e}", exc_info=True)
+            QMessageBox.critical(self, "오류", f"모니터링 시작 중 오류:\n{e}\n\n로그를 확인하세요.")
+            return
             
         else:
             # 모니터링 중지
@@ -1502,10 +1552,10 @@ class ZoomAttendanceMainWindow(QMainWindow):
     
     def on_main_face_threshold_changed(self, value: int):
         """
-        메인 화면에서 필요 인원수 변경
+        메인 화면에서 학생 수 변경
 
         Args:
-            value (int): 새로운 필요 인원수
+            value (int): 새로운 학생 수
         """
         try:
             # 값이 실제로 변경되었는지 확인
@@ -1513,7 +1563,28 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 return
 
             self.required_face_count = value
-            self.logger.info(f"필요 인원수 변경: {value}명")
+            self.logger.info(f"학생 수 변경: {value}명")
+
+            # 참여자 수 라벨 업데이트 (학생 + 교사 1명)
+            if hasattr(self, 'participant_count_label'):
+                self.participant_count_label.setText(f"예상 참여자: {value + 1}명 (교사포함)")
+
+            # 결석 허용 범위 검증
+            if self.absence_tolerance >= value:
+                QMessageBox.warning(
+                    self, "설정 오류",
+                    f"결석 허용 인원({self.absence_tolerance}명)은 학생 수({value}명)보다 작아야 합니다.\n"
+                    f"결석 허용을 {value - 1}명으로 변경합니다."
+                )
+                self.absence_tolerance = max(0, value - 1)
+                if hasattr(self, 'main_absence_spin'):
+                    self.main_absence_spin.blockSignals(True)
+                    self.main_absence_spin.setValue(self.absence_tolerance)
+                    self.main_absence_spin.blockSignals(False)
+
+            # 결석 허용 최대값 업데이트
+            if hasattr(self, 'main_absence_spin'):
+                self.main_absence_spin.setMaximum(value - 1)
 
             # 설정 저장 (비동기)
             QTimer.singleShot(100, self.save_settings)
@@ -1524,7 +1595,41 @@ class ZoomAttendanceMainWindow(QMainWindow):
                 self.face_threshold_spin.setValue(value)
                 self.face_threshold_spin.blockSignals(False)
         except Exception as e:
-            self.logger.error(f"인원수 변경 처리 오류: {e}", exc_info=True)
+            self.logger.error(f"학생 수 변경 처리 오류: {e}", exc_info=True)
+
+    def on_main_absence_changed(self, value: int):
+        """
+        메인 화면에서 결석 허용 인원 변경
+
+        Args:
+            value (int): 새로운 결석 허용 인원
+        """
+        try:
+            # 값 검증
+            if value >= self.required_face_count:
+                QMessageBox.warning(
+                    self, "설정 오류",
+                    f"결석 허용 인원({value}명)은 학생 수({self.required_face_count}명)보다 작아야 합니다."
+                )
+                # 최대값으로 제한
+                value = max(0, self.required_face_count - 1)
+                self.main_absence_spin.blockSignals(True)
+                self.main_absence_spin.setValue(value)
+                self.main_absence_spin.blockSignals(False)
+                return
+
+            # 값이 실제로 변경되었는지 확인
+            if self.absence_tolerance == value:
+                return
+
+            self.absence_tolerance = value
+            self.logger.info(f"결석 허용 변경: {value}명 (최소 출석: {self.required_face_count - value}명)")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"결석 허용 변경 처리 오류: {e}", exc_info=True)
 
     def handle_error(self, error_message: str):
         """
@@ -1672,15 +1777,17 @@ class ZoomAttendanceMainWindow(QMainWindow):
 
             # QSettings에 저장
             self.settings.setValue('required_face_count', self.required_face_count)
+            self.settings.setValue('absence_tolerance', self.absence_tolerance)
             self.settings.setValue('manual_duration', self.manual_duration)
 
-            self.logger.debug(f"설정 저장: 얼굴={self.required_face_count}, 시간={self.manual_duration}초")
+            self.logger.debug(f"설정 저장: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}, 시간={self.manual_duration}초")
 
             # 사용자에게 알림 (명시적으로 요청한 경우만)
             if show_message:
                 QMessageBox.information(self, "설정 저장",
                                        f"설정이 저장되었습니다.\n\n"
-                                       f"• 최소 얼굴 수: {self.required_face_count}명\n"
+                                       f"• 학생 수: {self.required_face_count}명\n"
+                                       f"• 결석 허용: {self.absence_tolerance}명\n"
                                        f"• 수동 탐지 시간: {self.manual_duration}초")
         except Exception as e:
             self.logger.error(f"설정 저장 오류: {e}", exc_info=True)
@@ -1727,14 +1834,20 @@ class ZoomAttendanceMainWindow(QMainWindow):
         try:
             # 기본값 또는 저장된 값 로드
             self.required_face_count = int(self.settings.value('required_face_count', 1))
+            self.absence_tolerance = int(self.settings.value('absence_tolerance', 0))
             self.manual_duration = int(self.settings.value('manual_duration', 30))
-            
+
+            # 검증: 결석 허용이 학생 수보다 크면 안됨
+            if self.absence_tolerance >= self.required_face_count:
+                self.logger.warning(f"결석 허용({self.absence_tolerance})이 학생 수({self.required_face_count})보다 큼. 0으로 재설정.")
+                self.absence_tolerance = 0
+
             # 교시 설정 로드
             saved_schedules = self.settings.value('class_schedules', None)
             if saved_schedules:
                 self.class_schedules = json.loads(saved_schedules)
-            
-            self.logger.info("설정 로드 완료")
+
+            self.logger.info(f"설정 로드 완료: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}")
             
         except Exception as e:
             self.logger.error(f"설정 로드 실패: {e}")
