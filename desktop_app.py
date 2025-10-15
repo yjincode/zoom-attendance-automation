@@ -244,6 +244,18 @@ class ZoomAttendanceMainWindow(QMainWindow):
             1: True, 2: True, 3: True, 4: True,
             5: True, 6: True, 7: True, 8: True
         }
+
+        # 스케줄 촬영 설정
+        self.capture_start_minute = 40   # 각 교시 촬영 시작 분 (기본 40분)
+        self.retry_interval = 5          # 재시도 간격 (분): 3, 5, 10
+        self.retry_count = 3             # 재시도 횟수: 0(없음), 3, 5, 10
+        self.detection_duration_mode = 60 # 감지 시간 (초): 30, 60, -1(실시간)
+        self.target_photo_count = 5      # 목표 사진 수: 1, 5, 10, 20
+        self.min_capture_interval = 1    # 캡처 간 최소 간격 (초)
+
+        # 촬영 상태 추적
+        self.current_attempt = 0         # 현재 시도 번호
+        self.attempt_results = {}        # {period: [attempt1_result, attempt2_result, ...]}
         
         # UI 초기화
         self.init_ui()
@@ -561,7 +573,75 @@ class ZoomAttendanceMainWindow(QMainWindow):
         schedule_layout.addWidget(lunch_label, 4, 0, 1, 2)
         
         layout.addWidget(schedule_group)
-        
+
+        # 스케줄 촬영 설정 그룹
+        capture_schedule_group = QGroupBox("⏰ 촬영 스케줄 설정")
+        capture_schedule_group.setMinimumWidth(250)
+        schedule_config_layout = QGridLayout(capture_schedule_group)
+        schedule_config_layout.setContentsMargins(10, 20, 10, 15)
+
+        # Row 0: 촬영 시작 시간
+        schedule_config_layout.addWidget(QLabel("촬영 시작 시간:"), 0, 0)
+        self.start_minute_spin = QSpinBox()
+        self.start_minute_spin.setRange(0, 59)
+        self.start_minute_spin.setValue(self.capture_start_minute)
+        self.start_minute_spin.setSuffix("분")
+        self.start_minute_spin.setToolTip("각 교시의 몇 분에 촬영을 시작할지 설정합니다")
+        self.start_minute_spin.valueChanged.connect(self.on_start_minute_changed)
+        schedule_config_layout.addWidget(self.start_minute_spin, 0, 1)
+
+        # Row 1: 재시도 간격
+        schedule_config_layout.addWidget(QLabel("재시도 간격:"), 1, 0)
+        self.retry_interval_combo = QComboBox()
+        self.retry_interval_combo.addItems(["3분", "5분", "10분"])
+        self.retry_interval_combo.setCurrentText(f"{self.retry_interval}분")
+        self.retry_interval_combo.setToolTip("실패 시 다음 시도까지의 대기 시간")
+        self.retry_interval_combo.currentTextChanged.connect(self.on_retry_interval_changed)
+        schedule_config_layout.addWidget(self.retry_interval_combo, 1, 1)
+
+        # Row 2: 재시도 횟수
+        schedule_config_layout.addWidget(QLabel("재시도 횟수:"), 2, 0)
+        self.retry_count_combo = QComboBox()
+        self.retry_count_combo.addItems(["하지 않음", "3번", "5번", "10번"])
+        if self.retry_count == 0:
+            self.retry_count_combo.setCurrentText("하지 않음")
+        else:
+            self.retry_count_combo.setCurrentText(f"{self.retry_count}번")
+        self.retry_count_combo.setToolTip("목표 미달성 시 재시도할 최대 횟수")
+        self.retry_count_combo.currentTextChanged.connect(self.on_retry_count_changed)
+        schedule_config_layout.addWidget(self.retry_count_combo, 2, 1)
+
+        # Row 3: 감지 시간 모드
+        schedule_config_layout.addWidget(QLabel("감지 시간:"), 3, 0)
+        self.detection_mode_combo = QComboBox()
+        self.detection_mode_combo.addItems(["30초간 진행", "1분간 진행", "실시간 감지"])
+        if self.detection_duration_mode == 30:
+            self.detection_mode_combo.setCurrentText("30초간 진행")
+        elif self.detection_duration_mode == 60:
+            self.detection_mode_combo.setCurrentText("1분간 진행")
+        else:
+            self.detection_mode_combo.setCurrentText("실시간 감지")
+        self.detection_mode_combo.setToolTip("한 번의 시도에서 얼굴 감지를 수행할 시간")
+        self.detection_mode_combo.currentTextChanged.connect(self.on_detection_mode_changed)
+        schedule_config_layout.addWidget(self.detection_mode_combo, 3, 1)
+
+        # Row 4: 목표 사진 수
+        schedule_config_layout.addWidget(QLabel("목표 사진 수:"), 4, 0)
+        self.target_photo_combo = QComboBox()
+        self.target_photo_combo.addItems(["1장", "5장", "10장", "20장"])
+        self.target_photo_combo.setCurrentText(f"{self.target_photo_count}장")
+        self.target_photo_combo.setToolTip("각 교시마다 촬영할 목표 사진 수")
+        self.target_photo_combo.currentTextChanged.connect(self.on_target_photo_changed)
+        schedule_config_layout.addWidget(self.target_photo_combo, 4, 1)
+
+        # 설명 레이블
+        description_label = QLabel("💡 실시간 감지 모드는 목표 달성 시 또는 교시 종료 시까지 계속 진행됩니다")
+        description_label.setStyleSheet("QLabel { color: #666; font-size: 10px; font-style: italic; }")
+        description_label.setWordWrap(True)
+        schedule_config_layout.addWidget(description_label, 5, 0, 1, 2)
+
+        layout.addWidget(capture_schedule_group)
+
         # 로그 섹션
         log_group = QGroupBox("📋 시스템 로그")
         log_layout = QVBoxLayout(log_group)
@@ -678,20 +758,18 @@ class ZoomAttendanceMainWindow(QMainWindow):
             current_time = now.time()
             class_schedule = self.scheduler.class_schedule
 
-            # 각 교시의 캡처 시간 확인 (35~40분, 5분간)
+            # 각 교시의 캡처 시간 확인 (설정된 시작 분부터)
             for period, (start_time, end_time) in enumerate(class_schedule, 1):
-                # 캡처 시작/종료 시간 계산
+                # 설정된 시작 분 사용
                 capture_start_hour = start_time.hour
-                capture_start_minute = start_time.minute + 35
+                capture_start_minute = start_time.minute + self.capture_start_minute
                 if capture_start_minute >= 60:
                     capture_start_hour += 1
                     capture_start_minute -= 60
 
-                capture_end_hour = start_time.hour
-                capture_end_minute = start_time.minute + 40
-                if capture_end_minute >= 60:
-                    capture_end_hour += 1
-                    capture_end_minute -= 60
+                # 교시 종료 시간을 캡처 종료 시간으로 사용
+                capture_end_hour = end_time.hour
+                capture_end_minute = end_time.minute
 
                 from datetime import time
                 capture_start = time(capture_start_hour, capture_start_minute)
@@ -706,12 +784,22 @@ class ZoomAttendanceMainWindow(QMainWindow):
 
                     # 현재 교시의 캡처 시도 횟수 확인
                     current_attempts = self.period_capture_counts.get(period, 0)
-                    max_attempts = self.max_captures_per_period
+                    target_photos = self.target_photo_count
+
+                    # 현재 시도 번호 계산 (1부터 시작)
+                    current_try = self.current_attempt + 1
 
                     if hasattr(self, 'schedule_current_label'):
-                        self.schedule_current_label.setText(
-                            f"📸 {period}교시 촬영 중 ({current_attempts}/{max_attempts}장)"
-                        )
+                        if self.detection_duration_mode == -1:
+                            # 실시간 감지 모드
+                            self.schedule_current_label.setText(
+                                f"📸 {period}교시 실시간 촬영 중 ({current_attempts}/{target_photos}장)"
+                            )
+                        else:
+                            # 시간제한 감지 모드
+                            self.schedule_current_label.setText(
+                                f"📸 {period}교시 {current_try}차 시도 ({current_attempts}/{target_photos}장)"
+                            )
 
                     if hasattr(self, 'schedule_attempt_label'):
                         self.schedule_attempt_label.setText(
@@ -719,14 +807,20 @@ class ZoomAttendanceMainWindow(QMainWindow):
                         )
 
                     if hasattr(self, 'schedule_next_label'):
-                        if current_attempts >= max_attempts:
+                        if current_attempts >= target_photos:
                             self.schedule_next_label.setText(
                                 f"✅ {period}교시 완료 (목표 달성)"
                             )
                         else:
-                            self.schedule_next_label.setText(
-                                f"다음 시도: 얼굴 감지 시 자동 촬영"
-                            )
+                            remaining_photos = target_photos - current_attempts
+                            if self.detection_duration_mode == -1:
+                                self.schedule_next_label.setText(
+                                    f"남은 목표: {remaining_photos}장 (실시간 감지 중)"
+                                )
+                            else:
+                                self.schedule_next_label.setText(
+                                    f"다음 시도: 얼굴 감지 시 자동 촬영 ({remaining_photos}장 필요)"
+                                )
                     return
 
                 # 다가오는 캡처 시간인 경우
@@ -745,8 +839,19 @@ class ZoomAttendanceMainWindow(QMainWindow):
                         )
 
                     if hasattr(self, 'schedule_next_label'):
+                        if self.detection_duration_mode == -1:
+                            mode_text = "실시간 감지"
+                        elif self.detection_duration_mode == 60:
+                            mode_text = "1분간 진행"
+                        else:
+                            mode_text = "30초간 진행"
+
+                        retry_text = ""
+                        if self.retry_count > 0:
+                            retry_text = f", 최대 {self.retry_count}회 재시도"
+
                         self.schedule_next_label.setText(
-                            f"촬영 기간: 5분간 (목표 {self.max_captures_per_period}장)"
+                            f"목표 {self.target_photo_count}장 ({mode_text}{retry_text})"
                         )
                     return
 
@@ -1631,6 +1736,129 @@ class ZoomAttendanceMainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"결석 허용 변경 처리 오류: {e}", exc_info=True)
 
+    def on_start_minute_changed(self, value: int):
+        """
+        촬영 시작 시간 변경
+
+        Args:
+            value (int): 새로운 시작 분
+        """
+        try:
+            if self.capture_start_minute == value:
+                return
+
+            self.capture_start_minute = value
+            self.logger.info(f"촬영 시작 시간 변경: {value}분")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"시작 시간 변경 처리 오류: {e}", exc_info=True)
+
+    def on_retry_interval_changed(self, text: str):
+        """
+        재시도 간격 변경
+
+        Args:
+            text (str): 선택된 텍스트 (예: "5분")
+        """
+        try:
+            # "5분" -> 5
+            value = int(text.replace("분", ""))
+
+            if self.retry_interval == value:
+                return
+
+            self.retry_interval = value
+            self.logger.info(f"재시도 간격 변경: {value}분")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"재시도 간격 변경 처리 오류: {e}", exc_info=True)
+
+    def on_retry_count_changed(self, text: str):
+        """
+        재시도 횟수 변경
+
+        Args:
+            text (str): 선택된 텍스트 (예: "3번" 또는 "하지 않음")
+        """
+        try:
+            if text == "하지 않음":
+                value = 0
+            else:
+                # "3번" -> 3
+                value = int(text.replace("번", ""))
+
+            if self.retry_count == value:
+                return
+
+            self.retry_count = value
+            self.logger.info(f"재시도 횟수 변경: {value}번")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"재시도 횟수 변경 처리 오류: {e}", exc_info=True)
+
+    def on_detection_mode_changed(self, text: str):
+        """
+        감지 시간 모드 변경
+
+        Args:
+            text (str): 선택된 텍스트 (예: "1분간 진행")
+        """
+        try:
+            if text == "30초간 진행":
+                value = 30
+            elif text == "1분간 진행":
+                value = 60
+            else:  # "실시간 감지"
+                value = -1
+
+            if self.detection_duration_mode == value:
+                return
+
+            self.detection_duration_mode = value
+            self.logger.info(f"감지 시간 모드 변경: {text}")
+
+            # 실시간 감지 모드는 재시도 로직 비활성화 경고
+            if value == -1:
+                self.logger.info("⚠️ 실시간 감지 모드: 재시도 로직이 비활성화되고 목표 달성 또는 교시 종료까지 계속됩니다")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"감지 모드 변경 처리 오류: {e}", exc_info=True)
+
+    def on_target_photo_changed(self, text: str):
+        """
+        목표 사진 수 변경
+
+        Args:
+            text (str): 선택된 텍스트 (예: "5장")
+        """
+        try:
+            # "5장" -> 5
+            value = int(text.replace("장", ""))
+
+            if self.target_photo_count == value:
+                return
+
+            self.target_photo_count = value
+            self.logger.info(f"목표 사진 수 변경: {value}장")
+
+            # 설정 저장 (비동기)
+            QTimer.singleShot(100, self.save_settings)
+
+        except Exception as e:
+            self.logger.error(f"목표 사진 수 변경 처리 오류: {e}", exc_info=True)
+
     def handle_error(self, error_message: str):
         """
         오류 처리
@@ -1780,7 +2008,16 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.settings.setValue('absence_tolerance', self.absence_tolerance)
             self.settings.setValue('manual_duration', self.manual_duration)
 
-            self.logger.debug(f"설정 저장: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}, 시간={self.manual_duration}초")
+            # 스케줄 설정 저장
+            self.settings.setValue('capture_start_minute', self.capture_start_minute)
+            self.settings.setValue('retry_interval', self.retry_interval)
+            self.settings.setValue('retry_count', self.retry_count)
+            self.settings.setValue('detection_duration_mode', self.detection_duration_mode)
+            self.settings.setValue('target_photo_count', self.target_photo_count)
+
+            self.logger.debug(f"설정 저장: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}, 시간={self.manual_duration}초, "
+                            f"시작분={self.capture_start_minute}, 재시도={self.retry_count}회/{self.retry_interval}분, "
+                            f"감지시간={self.detection_duration_mode}초, 목표사진={self.target_photo_count}장")
 
             # 사용자에게 알림 (명시적으로 요청한 경우만)
             if show_message:
@@ -1837,6 +2074,13 @@ class ZoomAttendanceMainWindow(QMainWindow):
             self.absence_tolerance = int(self.settings.value('absence_tolerance', 0))
             self.manual_duration = int(self.settings.value('manual_duration', 30))
 
+            # 스케줄 설정 로드
+            self.capture_start_minute = int(self.settings.value('capture_start_minute', 40))
+            self.retry_interval = int(self.settings.value('retry_interval', 5))
+            self.retry_count = int(self.settings.value('retry_count', 3))
+            self.detection_duration_mode = int(self.settings.value('detection_duration_mode', 60))
+            self.target_photo_count = int(self.settings.value('target_photo_count', 5))
+
             # 검증: 결석 허용이 학생 수보다 크면 안됨
             if self.absence_tolerance >= self.required_face_count:
                 self.logger.warning(f"결석 허용({self.absence_tolerance})이 학생 수({self.required_face_count})보다 큼. 0으로 재설정.")
@@ -1847,7 +2091,8 @@ class ZoomAttendanceMainWindow(QMainWindow):
             if saved_schedules:
                 self.class_schedules = json.loads(saved_schedules)
 
-            self.logger.info(f"설정 로드 완료: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}")
+            self.logger.info(f"설정 로드 완료: 학생={self.required_face_count}, 결석허용={self.absence_tolerance}, "
+                           f"시작분={self.capture_start_minute}, 재시도={self.retry_count}회/{self.retry_interval}분")
             
         except Exception as e:
             self.logger.error(f"설정 로드 실패: {e}")
@@ -1864,15 +2109,39 @@ class ZoomAttendanceMainWindow(QMainWindow):
             # 스핀박스 값 설정
             if hasattr(self, 'face_count_spinbox'):
                 self.face_count_spinbox.setValue(self.required_face_count)
-            
+
             if hasattr(self, 'duration_spinbox'):
                 self.duration_spinbox.setValue(self.manual_duration)
-            
+
+            # 스케줄 설정 UI 반영
+            if hasattr(self, 'start_minute_spin'):
+                self.start_minute_spin.setValue(self.capture_start_minute)
+
+            if hasattr(self, 'retry_interval_combo'):
+                self.retry_interval_combo.setCurrentText(f"{self.retry_interval}분")
+
+            if hasattr(self, 'retry_count_combo'):
+                if self.retry_count == 0:
+                    self.retry_count_combo.setCurrentText("하지 않음")
+                else:
+                    self.retry_count_combo.setCurrentText(f"{self.retry_count}번")
+
+            if hasattr(self, 'detection_mode_combo'):
+                if self.detection_duration_mode == 30:
+                    self.detection_mode_combo.setCurrentText("30초간 진행")
+                elif self.detection_duration_mode == 60:
+                    self.detection_mode_combo.setCurrentText("1분간 진행")
+                else:
+                    self.detection_mode_combo.setCurrentText("실시간 감지")
+
+            if hasattr(self, 'target_photo_combo'):
+                self.target_photo_combo.setCurrentText(f"{self.target_photo_count}장")
+
             # 교시별 체크박스 설정
             if hasattr(self, 'class_checkboxes'):
                 for period, checkbox in self.class_checkboxes.items():
                     checkbox.setChecked(self.class_schedules.get(period, True))
-                    
+
             self.logger.info("UI 설정값 반영 완료")
             
         except Exception as e:
